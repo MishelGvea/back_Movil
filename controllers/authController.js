@@ -1,33 +1,67 @@
 const { sql, config } = require('../db/sqlConfig');
 
 const login = async (req, res) => {
-    const { usuario, contrasena } = req.body;
+  const { usuario, contrasena } = req.body;
 
-    // 👇 Mensaje para verificar lo que recibe el backend desde el frontend
-    console.log('📩 Petición recibida desde frontend:', { usuario, contrasena });
+  console.log('📩 Petición recibida desde frontend:', { usuario, contrasena });
 
-    try {
-        const pool = await sql.connect(config);
-        const result = await pool
-            .request()
-            .input('usuario', sql.VarChar, usuario)
-            .input('contrasena', sql.VarChar, contrasena)
-            .query('SELECT * FROM Usuarios WHERE usuario = @usuario AND contrasena = @contrasena');
+  try {
+    const pool = await sql.connect(config);
 
-        // 👇 Mensaje para ver si SQL devolvió resultados
-        console.log('📤 Resultado de la consulta:', result.recordset);
+    // Buscar en DOCENTES
+    const docenteResult = await pool.request()
+      .input('usuario', sql.VarChar, usuario)
+      .input('contrasena', sql.VarChar, contrasena)
+      .query(`
+        SELECT 
+          RTRIM(vchClvTrabajador) AS usuario,
+          RTRIM(vchNombre) + ' ' + RTRIM(vchAPaterno) + ' ' + RTRIM(vchAMaterno) AS nombreCompleto,
+          'profesor' AS rol
+        FROM dbo.tbl_docentes
+        WHERE RTRIM(vchClvTrabajador) = RTRIM(@usuario)
+          AND RTRIM(vchContrasenia) = RTRIM(@contrasena)
+      `);
 
-        if (result.recordset.length === 0) {
-            return res.status(401).json({ mensaje: 'Credenciales inválidas' });
-        }
-
-        const user = result.recordset[0];
-        res.json({ mensaje: 'Login exitoso', usuario: user.usuario, rol: user.rol });
-
-    } catch (err) {
-        console.error('❌ Error en login:', err);
-        res.status(500).json({ error: 'Error en el servidor' });
+    if (docenteResult.recordset.length > 0) {
+      const docente = docenteResult.recordset[0];
+      return res.json({
+        mensaje: 'Login exitoso como docente',
+        usuario: docente.usuario,
+        nombre: docente.nombreCompleto,
+        rol: docente.rol
+      });
     }
+
+    // Buscar en ALUMNOS
+    const alumnoResult = await pool.request()
+      .input('usuario', sql.VarChar, usuario)
+      .input('contrasena', sql.VarChar, contrasena)
+      .query(`
+        SELECT 
+          RTRIM(vchMatricula) AS usuario,
+          RTRIM(vchNombre) + ' ' + RTRIM(vchAPaterno) + ' ' + RTRIM(vchAMaterno) AS nombreCompleto,
+          'alumno' AS rol
+        FROM dbo.tblAlumnos
+        WHERE RTRIM(vchMatricula) = RTRIM(@usuario)
+          AND RTRIM(vchContrasenia) = RTRIM(@contrasena)
+      `);
+
+    if (alumnoResult.recordset.length > 0) {
+      const alumno = alumnoResult.recordset[0];
+      return res.json({
+        mensaje: 'Login exitoso como alumno',
+        usuario: alumno.usuario,
+        nombre: alumno.nombreCompleto,
+        rol: alumno.rol
+      });
+    }
+
+    return res.status(401).json({ mensaje: 'Credenciales inválidas' });
+
+  } catch (err) {
+    console.error('❌ Error en login:', err);
+    return res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
 };
 
 module.exports = { login };
