@@ -8,7 +8,7 @@ const obtenerDatosAlumno = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    // Obtener datos generales del alumno
+    // Datos del alumno con nombre de carrera
     const alumno = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .query(`
@@ -59,7 +59,7 @@ const obtenerDatosAlumno = async (req, res) => {
   }
 };
 
-// Cambiar contraseña
+// Cambiar contraseña del alumno
 const cambiarContrasena = async (req, res) => {
   const { matricula } = req.params;
   const { actual, nueva } = req.body;
