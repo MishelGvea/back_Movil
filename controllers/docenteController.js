@@ -1,5 +1,6 @@
 const { sql, config } = require('../db/sqlConfig');
 
+// Obtener datos del docente
 const obtenerDatosDocente = async (req, res) => {
   const { clave } = req.params;
 
@@ -19,12 +20,14 @@ const obtenerDatosDocente = async (req, res) => {
     }
 
     res.json({ nombre: result.recordset[0].nombre });
+
   } catch (err) {
     console.error('❌ Error al obtener datos del docente:', err);
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
 
+// Obtener materias asignadas al docente
 const obtenerMateriasPorDocente = async (req, res) => {
   const { clave } = req.params;
 
@@ -34,8 +37,8 @@ const obtenerMateriasPorDocente = async (req, res) => {
       .input('clave', sql.VarChar, clave)
       .query(`
         SELECT DISTINCT
-        m.vchClvMateria,
-        m.vchNomMateria AS nombreMateria
+          m.vchClvMateria,
+          m.vchNomMateria AS nombreMateria
         FROM tbl_docente_materia dm
         JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
         WHERE dm.vchClvTrabajador = @clave
@@ -48,12 +51,12 @@ const obtenerMateriasPorDocente = async (req, res) => {
   }
 };
 
+// Obtener grupos que atiende el docente en una materia
 const obtenerGruposPorMateriaDocente = async (req, res) => {
   const { clave, clvMateria } = req.params;
 
   try {
     const pool = await sql.connect(config);
-
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .input('clvMateria', sql.VarChar, clvMateria)
