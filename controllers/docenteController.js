@@ -203,14 +203,148 @@ const obtenerListasCotejo = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
+// Agregar esta función al controllerDocente.js
 
+const obtenerActividadesPorGrupo = async (req, res) => {
+  const { claveDocente, claveMateria, idGrupo } = req.params;
 
+  try {
+    const pool = await sql.connect(config);
+    
+    // Consulta principal para obtener actividades del grupo
+    const result = await pool.request()
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('idGrupo', sql.Int, idGrupo)
+      .query(`
+        SELECT 
+          a.id_actividad,
+          a.titulo,
+          a.descripcion,
+          a.fecha_creacion,
+          a.id_estado_actividad,
+          ag.fecha_asignacion,
+          ag.fecha_entrega,
+          i.parcial,
+          g.vchGrupo,
+          -- Contar entregas de alumnos
+          (SELECT COUNT(*) 
+           FROM tbl_actividad_alumno aa 
+           WHERE aa.id_actividad = a.id_actividad) AS totalEntregas,
+          -- Contar total de alumnos en el grupo
+          (SELECT COUNT(*) 
+           FROM tblAlumnos al 
+           WHERE al.chvGrupo = @idGrupo) AS totalAlumnos,
+          -- Calcular promedio de calificaciones
+          (SELECT AVG(CAST(ec.calificacion AS FLOAT)) 
+           FROM tbl_actividad_alumno aa 
+           INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
+           WHERE aa.id_actividad = a.id_actividad 
+           AND ec.calificacion IS NOT NULL) AS promedio
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+        WHERE i.vchClvTrabajador = @claveDocente
+          AND i.vchClvMateria = @claveMateria
+          AND ag.id_grupo = @idGrupo
+        ORDER BY i.parcial, a.fecha_creacion DESC
+      `);
 
+    // Agrupar actividades por parcial
+    const actividadesPorParcial = {};
+    
+    result.recordset.forEach(actividad => {
+      const parcial = actividad.parcial;
+      
+      if (!actividadesPorParcial[parcial]) {
+        actividadesPorParcial[parcial] = [];
+      }
+      
+      // Determinar estado de la actividad
+      const ahora = new Date();
+      const fechaEntrega = new Date(actividad.fecha_entrega);
+      const esPendiente = fechaEntrega >= ahora;
+      
+      actividadesPorParcial[parcial].push({
+        id_actividad: actividad.id_actividad,
+        titulo: actividad.titulo,
+        descripcion: actividad.descripcion,
+        fecha_entrega: actividad.fecha_entrega,
+        fecha_asignacion: actividad.fecha_asignacion,
+        totalEntregas: actividad.totalEntregas || 0,
+        totalAlumnos: actividad.totalAlumnos || 0,
+        promedio: actividad.promedio ? Number(actividad.promedio.toFixed(1)) : null,
+        estado: esPendiente ? 'pendiente' : 'completada',
+        grupo: actividad.vchGrupo
+      });
+    });
 
+    // Convertir a array ordenado
+    const parciales = Object.keys(actividadesPorParcial)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .map(parcial => ({
+        numero: parcial,
+        nombre: `Parcial ${parcial}`,
+        actividades: actividadesPorParcial[parcial]
+      }));
+
+    res.json({
+      parciales,
+      totalPendientes: result.recordset.filter(a => {
+        const ahora = new Date();
+        const fechaEntrega = new Date(a.fecha_entrega);
+        return fechaEntrega >= ahora;
+      }).length
+    });
+
+  } catch (error) {
+    console.error('❌ Error al obtener actividades del grupo:', error);
+    res.status(500).json({ mensaje: 'Error interno del servidor' });
+  }
+};
+
+// Agregar esta función al controllerDocente.js
+
+const obtenerMateriasCompletas = async (req, res) => {
+  const { clave } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('clave', sql.VarChar, clave)
+      .query(`
+        SELECT DISTINCT
+          m.vchClvMateria,
+          m.vchNomMateria AS nombreMateria,
+          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
+          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos
+        FROM tbl_docente_materia dm
+        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
+        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
+        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
+        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
+          AND a.vchClvCuatri = dm.vchCuatrimestre
+          AND a.vchPeriodo = dm.Periodo
+        WHERE dm.vchClvTrabajador = @clave
+        GROUP BY m.vchClvMateria, m.vchNomMateria
+      `);
+
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('❌ Error al obtener materias completas:', err);
+    res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
+};
+
+// Y al final del archivo, agrégala al module.exports:
 module.exports = {
   obtenerDatosDocente,
   obtenerMateriasPorDocente,
   obtenerGruposPorMateriaDocente,
   crearActividad,
-  obtenerListasCotejo
+  obtenerListasCotejo,
+  obtenerActividadesPorGrupo,
+  obtenerMateriasCompletas  // ← AGREGAR ESTA LÍNEA
 };
