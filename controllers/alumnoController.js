@@ -49,7 +49,7 @@ const obtenerDatosAlumno = async (req, res) => {
       nombre: alumnoData.nombre,
       carrera: alumnoData.carrera,
       grupo: alumnoData.grupo,
-      cuatrimestre: alumnoData.cuatrimestre,
+      cuatri: alumnoData.cuatrimestre,
       materias
     });
 
@@ -97,7 +97,55 @@ const cambiarContrasena = async (req, res) => {
   }
 };
 
+// Obtener actividades por alumno
+const obtenerActividadesPorAlumno = async (req, res) => {
+  const { matricula, materia } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('materia', sql.VarChar, materia)
+      .query(`
+        SELECT 
+          AC.id_actividad,
+          AC.titulo,
+          AC.descripcion,
+          -- Asegurar que las fechas vengan en formato ISO string
+          CONVERT(VARCHAR, AG.fecha_asignacion, 126) as fecha_asignacion,
+          CONVERT(VARCHAR, AG.fecha_entrega, 126) as fecha_entrega,
+          EA.nombre_estado as estado,
+          I.nombre as instrumento,
+          TI.nombre_tipo as tipoInstrumento,
+          CASE 
+            WHEN I.parcial = 1 THEN 'Parcial 1'
+            WHEN I.parcial = 2 THEN 'Parcial 2'
+            WHEN I.parcial = 3 THEN 'Parcial 3'
+            ELSE 'Actividad General'
+          END as parcial
+        FROM tbl_actividad_alumno AA
+        INNER JOIN tblAlumnos A ON A.vchMatricula = AA.vchMatricula
+        INNER JOIN tbl_actividades AC ON AC.id_actividad = AA.id_actividad
+        INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
+        INNER JOIN tbl_estado_actividad EA ON EA.id_estado_actividad = AC.id_estado_actividad
+        INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
+        INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
+        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria
+        WHERE A.vchMatricula = @matricula 
+        AND M.vchNomMateria = @materia
+        ORDER BY AG.fecha_entrega
+      `);
+
+    console.log('Datos devueltos:', result.recordset);
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('Error al obtener actividades:', error);
+    res.status(500).json({ mensaje: 'Error en el servidor al obtener actividades del alumno' });
+  }
+};
+
 module.exports = {
   obtenerDatosAlumno,
   cambiarContrasena,
+  obtenerActividadesPorAlumno
 };
