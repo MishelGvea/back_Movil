@@ -5,7 +5,8 @@ const {
   obtenerDatosAlumno,
   cambiarContrasena,
   editarPerfil,
-  obtenerActividadesPorAlumno
+  obtenerActividadesPorAlumno,
+  obtenerCalificacionesHistoricas // 👈 Agregado correctamente
 } = require('../controllers/alumnoController');
 
 // Obtener datos del alumno
@@ -16,5 +17,8 @@ router.put('/cambiar-contrasena/:matricula', cambiarContrasena);
 
 // Obtener actividades por alumno y materia
 router.get('/actividades/:matricula/:materia', obtenerActividadesPorAlumno);
+
+// Obtener calificaciones históricas
+router.get('/calificaciones/:matricula', obtenerCalificacionesHistoricas);
 
 module.exports = router;
