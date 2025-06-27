@@ -360,9 +360,101 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
   }
 };
 
+// Obtener detalles de una actividad específica
+const obtenerDetalleActividad = async (req, res) => {
+  const { matricula, idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    console.log(`🔍 Obteniendo detalles de actividad ${idActividad} para alumno: ${matricula}`);
+
+    const result = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          AC.id_actividad,
+          AC.titulo,
+          AC.descripcion,
+          CONVERT(VARCHAR, AG.fecha_asignacion, 126) as fecha_asignacion,
+          CONVERT(VARCHAR, AG.fecha_entrega, 126) as fecha_entrega,
+          EA.nombre_estado as estado,
+          I.nombre as instrumento,
+          I.valor_total as puntos_total,
+          TI.nombre_tipo as tipoInstrumento,
+          M.vchNomMateria as materia,
+          CONCAT(D.vchAPaterno, ' ', D.vchAMaterno, ' ', D.vchNombre) AS docente,
+          CASE 
+            WHEN I.parcial = 1 THEN 'Parcial 1'
+            WHEN I.parcial = 2 THEN 'Parcial 2'
+            WHEN I.parcial = 3 THEN 'Parcial 3'
+            ELSE 'Actividad General'
+          END as parcial
+        FROM tbl_actividad_alumno AA
+        INNER JOIN tblAlumnos A ON A.vchMatricula = AA.vchMatricula
+        INNER JOIN tbl_actividades AC ON AC.id_actividad = AA.id_actividad
+        INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
+        INNER JOIN tbl_estado_actividad EA ON EA.id_estado_actividad = AC.id_estado_actividad
+        INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
+        INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
+        INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
+        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria
+        WHERE A.vchMatricula = @matricula 
+        AND AC.id_actividad = @idActividad
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Actividad no encontrada' });
+    }
+
+    const actividad = result.recordset[0];
+
+    // Formatear la respuesta con datos completos
+    const response = {
+      id_actividad: actividad.id_actividad,
+      titulo: actividad.titulo,
+      descripcion: actividad.descripcion,
+      fecha_asignacion: actividad.fecha_asignacion,
+      fecha_entrega: actividad.fecha_entrega,
+      estado: actividad.estado,
+      instrumento: actividad.instrumento,
+      tipoInstrumento: actividad.tipoInstrumento,
+      materia: actividad.materia,
+      docente: actividad.docente,
+      parcial: actividad.parcial,
+      puntos_total: actividad.puntos_total || 10,
+      rubrica: [
+        {
+          criterio: 'Presentación clara y ordenada',
+          puntos: Math.round((actividad.puntos_total || 10) * 0.2), // 20% del total
+          icono: '📄'
+        },
+        {
+          criterio: 'Procedimiento correcto y completo',
+          puntos: Math.round((actividad.puntos_total || 10) * 0.5), // 50% del total
+          icono: '🧮'
+        },
+        {
+          criterio: 'Entrega puntual en la fecha indicada',
+          puntos: Math.round((actividad.puntos_total || 10) * 0.3), // 30% del total
+          icono: '⏰'
+        }
+      ]
+    };
+
+    console.log(`✅ Detalle de actividad obtenido: ${response.titulo}`);
+    res.json(response);
+
+  } catch (error) {
+    console.error('❌ Error al obtener detalle de actividad:', error);
+    res.status(500).json({ mensaje: 'Error en el servidor al obtener detalle de actividad' });
+  }
+};
 module.exports = {
   obtenerDatosAlumno,
   cambiarContrasena,
   obtenerActividadesPorAlumno,
-  obtenerCalificacionesHistoricas
+  obtenerCalificacionesHistoricas, 
+  obtenerDetalleActividad
 };
