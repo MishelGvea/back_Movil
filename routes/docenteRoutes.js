@@ -16,7 +16,10 @@ const { obtenerDatosDocente,
         obtenerAlumnosPorGrupo,
         simularEquiposAleatorios,
         obtenerActividadesConEquiposPorGrupo,
-        crearActividadCompleta
+        crearActividadCompleta,
+        obtenerPeriodoActual,
+        obtenerPeriodosDocente,
+        obtenerMateriasCompletasPorPeriodo
       } = require('../controllers/docenteController');
 
 // ===============================================
@@ -29,6 +32,10 @@ router.get('/:clave/materia/:clvMateria/grupos', obtenerGruposPorMateriaDocente)
 router.post('/crear-actividad', crearActividad);
 router.get('/:claveDocente/materia/:claveMateria/listas-cotejo', obtenerListasCotejo);
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades', obtenerActividadesPorGrupo);
+// 🆕 Rutas para manejo de periodos
+router.get('/periodo-actual', obtenerPeriodoActual);
+router.get('/:clave/periodos', obtenerPeriodosDocente);
+router.get('/:clave/materias-periodo/:periodo', obtenerMateriasCompletasPorPeriodo);
 
 // Cambiar contraseña del docente
 // POST /api/docente/cambiar-contrasena
@@ -54,5 +61,6 @@ router.post('/crear-actividad-completa', crearActividadCompleta);
 
 // Actividades con equipos por grupo
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades-equipos', obtenerActividadesConEquiposPorGrupo);
+
 
 module.exports = router;
