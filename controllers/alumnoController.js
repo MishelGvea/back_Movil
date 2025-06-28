@@ -1,5 +1,128 @@
 const { sql, config } = require('../db/sqlConfig');
 
+// Función auxiliar para obtener las fechas del cuatrimestre DINÁMICAMENTE
+const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
+  try {
+    console.log(`📅 Consultando fechas dinámicamente para periodo: ${periodo}, cuatrimestre: ${cuatrimestre}`);
+    
+    // PASO 1: Obtener el idPeriodo desde tbl_materias
+    const periodoResult = await pool.request()
+      .input('cuatrimestre', sql.VarChar, cuatrimestre)
+      .query(`
+        SELECT DISTINCT idPeriodo 
+        FROM tbl_materias 
+        WHERE vchCuatrimestre = @cuatrimestre
+      `);
+
+    let idPeriodo = null;
+    if (periodoResult.recordset.length > 0) {
+      idPeriodo = periodoResult.recordset[0].idPeriodo;
+      console.log(`📅 idPeriodo encontrado: ${idPeriodo}`);
+    } else {
+      console.log(`⚠️ No se encontró idPeriodo para cuatrimestre: ${cuatrimestre}`);
+      // DEBUG: Ver qué cuatrimestres existen
+      const debugCuatrimestres = await pool.request().query(`
+        SELECT DISTINCT vchCuatrimestre, idPeriodo 
+        FROM tbl_materias 
+        ORDER BY vchCuatrimestre
+      `);
+      console.log(`📋 Cuatrimestres disponibles en tbl_materias:`, debugCuatrimestres.recordset);
+    }
+
+    // PASO 2: Consultar las fechas desde tbl_periodos
+    let fechasResult = null;
+    if (idPeriodo) {
+      fechasResult = await pool.request()
+        .input('idPeriodo', sql.Int, idPeriodo)
+        .query(`
+          SELECT mesInicia, mesTermina
+          FROM tbl_periodos 
+          WHERE idPeriodo = @idPeriodo
+        `);
+      
+      console.log(`📅 Resultado consulta tbl_periodos:`, fechasResult.recordset);
+    } else {
+      // DEBUG: Ver toda la tabla tbl_periodos
+      const debugPeriodos = await pool.request().query(`
+        SELECT * FROM tbl_periodos ORDER BY idPeriodo
+      `);
+      console.log(`📋 Todos los periodos disponibles en tbl_periodos:`, debugPeriodos.recordset);
+    }
+
+    // PASO 3: Calcular fechas dinámicas si tenemos datos
+    if (fechasResult && fechasResult.recordset.length > 0) {
+      const datos = fechasResult.recordset[0];
+      console.log(`📅 Datos obtenidos de tbl_periodos:`, datos);
+      
+      // Verificar que los datos no sean null/undefined
+      if (datos.mesInicia && datos.mesTermina) {
+        const año = periodo.split('-')[0];
+        
+        // Como mesInicia y mesTermina son nombres de meses (no números), los usamos directamente
+        const mesIniciaTexto = datos.mesInicia;
+        const mesTerminaTexto = datos.mesTermina;
+        
+        // Mapear nombres de meses a números para construir fechas
+        const mesesANumeros = {
+          'Enero': 1, 'Febrero': 2, 'Marzo': 3, 'Abril': 4,
+          'Mayo': 5, 'Junio': 6, 'Julio': 7, 'Agosto': 8,
+          'Septiembre': 9, 'Octubre': 10, 'Noviembre': 11, 'Diciembre': 12
+        };
+        
+        const numeroMesInicia = mesesANumeros[mesIniciaTexto];
+        const numeroMesTermina = mesesANumeros[mesTerminaTexto];
+        
+        const fechaInicio = `${año}-${numeroMesInicia.toString().padStart(2, '0')}-01`;
+        const fechaFin = `${año}-${numeroMesTermina.toString().padStart(2, '0')}-30`;
+        const nombreRango = `${mesIniciaTexto}-${mesTerminaTexto}`; // SIN AÑO
+        
+        console.log(`✅ Fechas dinámicas calculadas: ${nombreRango}`);
+        console.log(`   - Fecha inicio: ${fechaInicio}`);
+        console.log(`   - Fecha fin: ${fechaFin}`);
+        
+        return {
+          fechaInicio,
+          fechaFin,
+          nombreRango, // Solo los meses: "Enero-Abril"
+          año,
+          origen: 'dinamico'
+        };
+      } else {
+        console.log(`⚠️ mesInicia o mesTermina son null/undefined:`, datos);
+      }
+    }
+    
+    // PASO 4: Fallback estático
+    console.log(`⚠️ Usando cálculo estático`);
+    const año = periodo.split('-')[0];
+    const rangosCuatrimestres = {
+      '1': { inicio: `${año}-01-01`, fin: `${año}-04-30`, nombre: 'Enero-Abril' },
+      '2': { inicio: `${año}-05-01`, fin: `${año}-08-31`, nombre: 'Mayo-Agosto' },
+      '3': { inicio: `${año}-09-01`, fin: `${año}-12-31`, nombre: 'Septiembre-Diciembre' }
+    };
+    const rango = rangosCuatrimestres[cuatrimestre] || rangosCuatrimestres['1'];
+    
+    return {
+      fechaInicio: rango.inicio,
+      fechaFin: rango.fin,
+      nombreRango: rango.nombre, // SIN AÑO: "Enero-Abril"
+      año,
+      origen: 'estatico'
+    };
+    
+  } catch (error) {
+    console.log('⚠️ Error:', error);
+    const añoActual = new Date().getFullYear();
+    return {
+      fechaInicio: `${añoActual}-01-01`,
+      fechaFin: `${añoActual}-04-30`,
+      nombreRango: `Enero-Abril`, // SIN AÑO
+      año: añoActual.toString(),
+      origen: 'default'
+    };
+  }
+};
+
 // Obtener datos del alumno y materias
 const obtenerDatosAlumno = async (req, res) => {
   const { matricula } = req.params;
@@ -29,6 +152,9 @@ const obtenerDatosAlumno = async (req, res) => {
       return res.status(404).json({ mensaje: 'Alumno no encontrado' });
     }
 
+    // Calcular las fechas del cuatrimestre DINÁMICAMENTE
+    const fechasCuatrimestre = await obtenerFechasCuatrimestre(pool, alumnoData.periodo, alumnoData.cuatrimestre);
+
     // Obtener materias del alumno desde la vista filtradas por periodo
     const materiasResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
@@ -52,7 +178,14 @@ const obtenerDatosAlumno = async (req, res) => {
       grupo: alumnoData.grupo,
       cuatri: alumnoData.cuatrimestre,
       periodo: alumnoData.periodo,
-      materias
+      materias,
+      // Fechas del cuatrimestre dinámicas
+      fechasCuatrimestre: {
+        fechaInicio: fechasCuatrimestre.fechaInicio,
+        fechaFin: fechasCuatrimestre.fechaFin,
+        nombreRango: fechasCuatrimestre.nombreRango,
+        año: fechasCuatrimestre.año
+      }
     });
 
   } catch (err) {
