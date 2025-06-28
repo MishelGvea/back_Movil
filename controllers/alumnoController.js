@@ -56,7 +56,8 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
       
       // Verificar que los datos no sean null/undefined
       if (datos.mesInicia && datos.mesTermina) {
-        const año = periodo.split('-')[0];
+        // CORREGIR: Extraer solo los primeros 4 caracteres para el año
+        const año = periodo.substring(0, 4); // "20251" → "2025"
         
         // Como mesInicia y mesTermina son nombres de meses (no números), los usamos directamente
         const mesIniciaTexto = datos.mesInicia;
@@ -74,7 +75,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
         
         const fechaInicio = `${año}-${numeroMesInicia.toString().padStart(2, '0')}-01`;
         const fechaFin = `${año}-${numeroMesTermina.toString().padStart(2, '0')}-30`;
-        const nombreRango = `${mesIniciaTexto}-${mesTerminaTexto}`; // SIN AÑO
+        const nombreRango = `${mesIniciaTexto}-${mesTerminaTexto} ${año}`; // CON AÑO
         
         console.log(`✅ Fechas dinámicas calculadas: ${nombreRango}`);
         console.log(`   - Fecha inicio: ${fechaInicio}`);
@@ -83,7 +84,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
         return {
           fechaInicio,
           fechaFin,
-          nombreRango, // Solo los meses: "Enero-Abril"
+          nombreRango, // Con año: "Enero-Abril 2025"
           año,
           origen: 'dinamico'
         };
@@ -94,7 +95,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
     
     // PASO 4: Fallback estático
     console.log(`⚠️ Usando cálculo estático`);
-    const año = periodo.split('-')[0];
+    const año = periodo.substring(0, 4); // "20251" → "2025"
     const rangosCuatrimestres = {
       '1': { inicio: `${año}-01-01`, fin: `${año}-04-30`, nombre: 'Enero-Abril' },
       '2': { inicio: `${año}-05-01`, fin: `${año}-08-31`, nombre: 'Mayo-Agosto' },
@@ -105,7 +106,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
     return {
       fechaInicio: rango.inicio,
       fechaFin: rango.fin,
-      nombreRango: rango.nombre, // SIN AÑO: "Enero-Abril"
+      nombreRango: `${rango.nombre} ${año}`, // CON AÑO: "Enero-Abril 2025"
       año,
       origen: 'estatico'
     };
@@ -116,7 +117,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
     return {
       fechaInicio: `${añoActual}-01-01`,
       fechaFin: `${añoActual}-04-30`,
-      nombreRango: `Enero-Abril`, // SIN AÑO
+      nombreRango: `Enero-Abril ${añoActual}`, // CON AÑO
       año: añoActual.toString(),
       origen: 'default'
     };
