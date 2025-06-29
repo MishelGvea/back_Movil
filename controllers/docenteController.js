@@ -419,7 +419,7 @@ const obtenerListasCotejo = async (req, res) => {
   }
 };
 
-// Obtener actividades por grupo - VERSIÓN CORREGIDA
+// Obtener actividades por grupo - VERSIÓN CORREGIDA FINAL
 const obtenerActividadesPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
   
@@ -554,7 +554,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
 
     console.log(`✅ Encontradas ${result.recordset.length} actividades`);
 
-    // Procesar resultados y agrupar por parcial
+    // Procesar resultados y agrupar por parcial - SIN SEPARAR POR FECHA
     const actividadesPorParcial = {};
     let estadisticasGenerales = {
       totalActividades: result.recordset.length,
@@ -617,8 +617,9 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         diasRestantes: actividad.diasRestantes,
         grupo: actividad.vchGrupo,
         instrumento: actividad.nombre_instrumento,
-        urgente: actividad.diasRestantes <= 2 && estado === 'activa',
-        requiereAtencion: (actividad.porcentajeCompletado || 0) < 50 && estado === 'activa'
+        parcial: actividad.parcial,
+        urgente: actividad.diasRestantes <= 2 && estado === 'pendiente',
+        requiereAtencion: (actividad.porcentajeCompletado || 0) < 50 && estado === 'pendiente'
       });
     });
 
@@ -635,24 +636,13 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       .sort((a, b) => a - b)
       .map(parcial => actividadesPorParcial[parcial]);
 
-    // Ordenar actividades pendientes por fecha de entrega
-    actividadesPendientesConTiempo.sort((a, b) => 
-      new Date(a.fecha_entrega).getTime() - new Date(b.fecha_entrega).getTime()
-    );
+    console.log(`📊 Estadísticas: ${estadisticasGenerales.totalActividades} total`);
 
-    console.log(`📊 Estadísticas: ${estadisticasGenerales.totalActividades} total, ${estadisticasGenerales.conTiempo} con tiempo, ${estadisticasGenerales.vencidas} vencidas`);
-
-    // NUEVA RESPUESTA con sección de pendientes
+    // RESPUESTA SIMPLE - Solo parciales (sin sección pendientes por ahora)
     res.json({
-      actividadesPendientes: {
-        titulo: "📅 Actividades Pendientes",
-        descripcion: "Actividades que aún tienen tiempo para entregar",
-        actividades: actividadesPendientesConTiempo,
-        total: actividadesPendientesConTiempo.length
-      },
       parciales,
       estadisticas: estadisticasGenerales,
-      totalPendientes: actividadesPendientesConTiempo.length
+      totalPendientes: estadisticasGenerales.pendiente
     });
 
   } catch (error) {
@@ -1125,6 +1115,374 @@ const crearActividadCompleta = async (req, res) => {
 };
 
 // ===============================================
+// 🆕 FUNCIONES PARA CALIFICAR ACTIVIDADES
+// ===============================================
+
+// Obtener datos de actividad para calificar
+const obtenerDatosActividad = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          a.id_actividad,
+          a.titulo,
+          a.descripcion,
+          a.numero_actividad,
+          a.id_modalidad,
+          i.id_instrumento,
+          i.nombre as nombre_instrumento,
+          i.parcial,
+          i.valor_total,
+          ag.fecha_entrega,
+          g.vchGrupo,
+          m.vchNomMateria
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+        INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria
+        WHERE a.id_actividad = @idActividad
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+
+    res.json(result.recordset[0]);
+  } catch (error) {
+    console.error('❌ Error al obtener datos de actividad:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// ===============================================
+// FUNCIONES CORREGIDAS DEL BACKEND - VERSIÓN FINAL
+// ===============================================
+
+// Obtener criterios de evaluación de una actividad
+const obtenerCriteriosActividad = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el instrumento de la actividad
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT i.id_instrumento
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        WHERE a.id_actividad = @idActividad
+      `);
+
+    if (instrumentoResult.recordset.length === 0) {
+      return res.status(404).json({ error: 'Instrumento no encontrado' });
+    }
+
+    const idInstrumento = instrumentoResult.recordset[0].id_instrumento;
+
+    // Obtener criterios del instrumento
+    const criteriosResult = await pool.request()
+      .input('idInstrumento', sql.Int, idInstrumento)
+      .query(`
+        SELECT 
+          id_criterio,
+          nombre,
+          descripcion,
+          valor_maximo
+        FROM tbl_criterios
+        WHERE id_instrumento = @idInstrumento
+        ORDER BY id_criterio
+      `);
+
+    // Mapear los resultados con nombres consistentes
+    const criterios = criteriosResult.recordset.map(criterio => ({
+      id_criterio: criterio.id_criterio,
+      nombre_criterio: criterio.nombre,
+      descripcion: criterio.descripcion,
+      valor_maximo: criterio.valor_maximo
+    }));
+
+    res.json(criterios);
+  } catch (error) {
+    console.error('❌ Error al obtener criterios:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
+const obtenerEquiposParaCalificar = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el valor total del instrumento y todos los criterios
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          i.valor_total,
+          SUM(c.valor_maximo) as suma_maxima_criterios
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
+        WHERE a.id_actividad = @idActividad
+        GROUP BY i.valor_total
+      `);
+    
+    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
+    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
+
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .input('valorTotal', sql.Float, valorTotal)
+      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
+      .query(`
+        SELECT 
+          ae.id_actividad_equipo,
+          e.id_equipo,
+          e.nombre_equipo,
+          -- Integrantes del equipo
+          STUFF((
+            SELECT ', ' + al2.vchNombre + ' ' + ISNULL(al2.vchAPaterno, '')
+            FROM tbl_equipo_alumno ea2
+            INNER JOIN tblAlumnos al2 ON ea2.vchMatricula = al2.vchMatricula
+            WHERE ea2.id_equipo = e.id_equipo
+            FOR XML PATH('')
+          ), 1, 2, '') as integrantes,
+          (SELECT COUNT(*) FROM tbl_equipo_alumno ea3 WHERE ea3.id_equipo = e.id_equipo) as totalIntegrantes,
+          -- Verificar si ya está calificado
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ece 
+              WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
+            ) THEN 1 
+            ELSE 0 
+          END as yaCalificado,
+          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
+          (SELECT 
+             ROUND(SUM(CAST(ece2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
+           FROM tbl_evaluacion_criterioActividadEquipo ece2
+           WHERE ece2.id_actividad_equipo = ae.id_actividad_equipo
+          ) as calificacionTotal
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+        WHERE ae.id_actividad = @idActividad
+        ORDER BY e.nombre_equipo
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener equipos para calificar:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener alumnos para calificar (modalidad individual) - CÁLCULO COMPLETAMENTE CORREGIDO
+const obtenerAlumnosParaCalificar = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el valor total del instrumento y todos los criterios
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          i.valor_total,
+          SUM(c.valor_maximo) as suma_maxima_criterios
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
+        WHERE a.id_actividad = @idActividad
+        GROUP BY i.valor_total
+      `);
+    
+    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
+    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
+
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .input('valorTotal', sql.Float, valorTotal)
+      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
+      .query(`
+        SELECT 
+          aa.id_actividad_alumno,
+          aa.vchMatricula,
+          al.vchNombre + ' ' + ISNULL(al.vchAPaterno, '') + ' ' + ISNULL(al.vchAMaterno, '') as nombreCompleto,
+          -- Verificar si ya está calificado
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividad ec 
+              WHERE ec.id_actividad_alumno = aa.id_actividad_alumno
+            ) THEN 1 
+            ELSE 0 
+          END as yaCalificado,
+          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
+          (SELECT 
+             ROUND(SUM(CAST(ec2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
+           FROM tbl_evaluacion_criterioActividad ec2
+           WHERE ec2.id_actividad_alumno = aa.id_actividad_alumno
+          ) as calificacionTotal
+        FROM tbl_actividad_alumno aa
+        INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+        WHERE aa.id_actividad = @idActividad
+        ORDER BY al.vchNombre, al.vchAPaterno
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener alumnos para calificar:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+// Obtener calificaciones existentes de un alumno - CORREGIDA
+const obtenerCalificacionesAlumno = async (req, res) => {
+  const { idActividadAlumno } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividadAlumno', sql.Int, idActividadAlumno)
+      .query(`
+        SELECT 
+          ec.id_criterio,
+          ec.calificacion,
+          c.nombre as nombre_criterio,
+          c.valor_maximo
+        FROM tbl_evaluacion_criterioActividad ec
+        INNER JOIN tbl_criterios c ON ec.id_criterio = c.id_criterio
+        WHERE ec.id_actividad_alumno = @idActividadAlumno
+        ORDER BY c.id_criterio
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener calificaciones del alumno:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener calificaciones existentes de un equipo - CORREGIDA
+const obtenerCalificacionesEquipo = async (req, res) => {
+  const { idActividadEquipo } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT 
+          ece.id_criterio,
+          ece.calificacion,
+          c.nombre as nombre_criterio,
+          c.valor_maximo
+        FROM tbl_evaluacion_criterioActividadEquipo ece
+        INNER JOIN tbl_criterios c ON ece.id_criterio = c.id_criterio
+        WHERE ece.id_actividad_equipo = @idActividadEquipo
+        ORDER BY c.id_criterio
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener calificaciones del equipo:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Guardar calificaciones de un alumno
+const guardarCalificacionesAlumno = async (req, res) => {
+  const { idActividadAlumno, calificaciones } = req.body;
+  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
+
+  const transaction = new sql.Transaction();
+
+  try {
+    const pool = await sql.connect(config);
+    await transaction.begin();
+
+    // Eliminar calificaciones existentes
+    await transaction.request()
+      .input('idActividadAlumno', sql.Int, idActividadAlumno)
+      .query(`
+        DELETE FROM tbl_evaluacion_criterioActividad 
+        WHERE id_actividad_alumno = @idActividadAlumno
+      `);
+
+    // Insertar nuevas calificaciones
+    for (const cal of calificaciones) {
+      await transaction.request()
+        .input('idActividadAlumno', sql.Int, idActividadAlumno)
+        .input('idCriterio', sql.Int, cal.id_criterio)
+        .input('calificacion', sql.Float, cal.calificacion)
+        .query(`
+          INSERT INTO tbl_evaluacion_criterioActividad (
+            id_actividad_alumno, id_criterio, calificacion
+          ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
+        `);
+    }
+
+    await transaction.commit();
+    res.json({ mensaje: 'Calificaciones guardadas correctamente' });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error al guardar calificaciones del alumno:', error);
+    res.status(500).json({ error: 'Error al guardar calificaciones' });
+  }
+};
+
+// Guardar calificaciones de un equipo
+const guardarCalificacionesEquipo = async (req, res) => {
+  const { idActividadEquipo, idEquipo, calificaciones } = req.body;
+  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
+
+  const transaction = new sql.Transaction();
+
+  try {
+    const pool = await sql.connect(config);
+    await transaction.begin();
+
+    // Eliminar calificaciones existentes
+    await transaction.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        DELETE FROM tbl_evaluacion_criterioActividadEquipo 
+        WHERE id_actividad_equipo = @idActividadEquipo
+      `);
+
+    // Insertar nuevas calificaciones
+    for (const cal of calificaciones) {
+      await transaction.request()
+        .input('idEquipo', sql.Int, idEquipo)
+        .input('idActividadEquipo', sql.Int, idActividadEquipo)
+        .input('idCriterio', sql.Int, cal.id_criterio)
+        .input('calificacion', sql.Float, cal.calificacion)
+        .query(`
+          INSERT INTO tbl_evaluacion_criterioActividadEquipo (
+            id_equipo, id_actividad_equipo, id_criterio, calificacion
+          ) VALUES (@idEquipo, @idActividadEquipo, @idCriterio, @calificacion)
+        `);
+    }
+
+    await transaction.commit();
+    res.json({ mensaje: 'Calificaciones del equipo guardadas correctamente' });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error al guardar calificaciones del equipo:', error);
+    res.status(500).json({ error: 'Error al guardar calificaciones del equipo' });
+  }
+};
+
+// ===============================================
 // EXPORTS COMPLETOS
 // ===============================================
 module.exports = {
@@ -1155,5 +1513,15 @@ module.exports = {
   obtenerEquiposPorGrupo,
   obtenerAlumnosPorGrupo,
   simularEquiposAleatorios,
-  obtenerActividadesConEquiposPorGrupo
+  obtenerActividadesConEquiposPorGrupo,
+
+  // Funciones de calificación
+  obtenerDatosActividad,
+  obtenerCriteriosActividad,
+  obtenerAlumnosParaCalificar,
+  obtenerEquiposParaCalificar,
+  obtenerCalificacionesAlumno,
+  obtenerCalificacionesEquipo,
+  guardarCalificacionesAlumno,
+  guardarCalificacionesEquipo
 };
