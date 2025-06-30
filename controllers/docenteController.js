@@ -57,7 +57,7 @@ const obtenerPerfilDocente = async (req, res) => {
   }
 };
 
-// Obtener materias asignadas al docente
+// Obtener materias asignadas al docente (sin filtro de periodo)
 const obtenerMateriasPorDocente = async (req, res) => {
   const { clave } = req.params;
 
@@ -77,6 +77,190 @@ const obtenerMateriasPorDocente = async (req, res) => {
     res.json(result.recordset);
   } catch (err) {
     console.error('❌ Error al obtener materias del docente:', err);
+    res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
+};
+
+// 🆕 FUNCIÓN PRINCIPAL: Obtener materias completas del PERIODO ACTUAL
+const obtenerMateriasCompletas = async (req, res) => {
+  const { clave } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Obtener el periodo más reciente (actual) desde la base de datos
+    const periodoActualResult = await pool.request().query(`
+      SELECT TOP 1 Periodo 
+      FROM tbl_docente_materia 
+      ORDER BY Periodo DESC
+    `);
+    
+    if (periodoActualResult.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'No se encontraron periodos asignados' });
+    }
+    
+    const periodoActual = periodoActualResult.recordset[0].Periodo;
+    console.log(`🗓️ Filtrando materias por periodo actual: ${periodoActual}`);
+
+    const result = await pool.request()
+      .input('clave', sql.VarChar, clave)
+      .input('periodoActual', sql.VarChar, periodoActual)
+      .query(`
+        SELECT DISTINCT
+          m.vchClvMateria,
+          m.vchNomMateria AS nombreMateria,
+          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
+          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos,
+          dm.vchCuatrimestre,
+          dm.Periodo
+        FROM tbl_docente_materia dm
+        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
+        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
+        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
+        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
+          AND a.vchClvCuatri = dm.vchCuatrimestre
+          AND a.vchPeriodo = dm.Periodo
+        WHERE dm.vchClvTrabajador = @clave
+          AND dm.Periodo = @periodoActual
+        GROUP BY m.vchClvMateria, m.vchNomMateria, dm.vchCuatrimestre, dm.Periodo
+        ORDER BY m.vchNomMateria
+      `);
+
+    console.log(`✅ Encontradas ${result.recordset.length} materias del periodo actual (${periodoActual})`);
+    
+    // Agregar información del periodo para debugging
+    const responseData = result.recordset.map(materia => ({
+      ...materia,
+      periodoInfo: `${periodoActual} - Cuatrimestre ${materia.vchCuatrimestre}`
+    }));
+
+    res.json(responseData);
+
+  } catch (err) {
+    console.error('❌ Error al obtener materias completas del periodo actual:', err);
+    res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
+};
+
+// 🆕 FUNCIÓN AUXILIAR: Obtener información del periodo actual
+const obtenerPeriodoActual = async (req, res) => {
+  try {
+    const pool = await sql.connect(config);
+    
+    // Obtener el periodo más reciente
+    const periodoResult = await pool.request().query(`
+      SELECT TOP 1 Periodo 
+      FROM tbl_docente_materia 
+      ORDER BY Periodo DESC
+    `);
+    
+    if (periodoResult.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'No se encontraron periodos' });
+    }
+
+    const periodoActual = periodoResult.recordset[0].Periodo;
+    
+    // Extraer año y cuatrimestre del periodo
+    const año = periodoActual.toString().substring(0, 4);
+    const cuatrimestreNumero = periodoActual.toString().substring(4, 5);
+    
+    // Obtener información del cuatrimestre desde tbl_periodos
+    const cuatrimestreInfo = await pool.request()
+      .input('idPeriodo', sql.Int, parseInt(cuatrimestreNumero))
+      .query(`
+        SELECT mesInicia, mesTermina 
+        FROM tbl_periodos 
+        WHERE idPeriodo = @idPeriodo
+      `);
+
+    const infoCompleta = {
+      periodoActual,
+      año,
+      cuatrimestreNumero,
+      descripcion: `Año ${año}, Cuatrimestre ${cuatrimestreNumero}`,
+      ...(cuatrimestreInfo.recordset.length > 0 && {
+        mesInicia: cuatrimestreInfo.recordset[0].mesInicia,
+        mesTermina: cuatrimestreInfo.recordset[0].mesTermina
+      })
+    };
+
+    res.json(infoCompleta);
+
+  } catch (err) {
+    console.error('❌ Error al obtener periodo actual:', err);
+    res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
+};
+
+// 🆕 FUNCIÓN DE DEBUG: Ver todos los periodos de un docente
+const obtenerPeriodosDocente = async (req, res) => {
+  const { clave } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('clave', sql.VarChar, clave)
+      .query(`
+        SELECT DISTINCT
+          dm.Periodo,
+          dm.vchCuatrimestre,
+          COUNT(DISTINCT dm.vchClvMateria) as totalMaterias,
+          COUNT(DISTINCT dmg.id_grupo) as totalGrupos,
+          CASE 
+            WHEN dm.Periodo = (SELECT TOP 1 Periodo FROM tbl_docente_materia ORDER BY Periodo DESC)
+            THEN 'ACTUAL'
+            ELSE 'ANTERIOR'
+          END as estado
+        FROM tbl_docente_materia dm
+        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
+        WHERE dm.vchClvTrabajador = @clave
+        GROUP BY dm.Periodo, dm.vchCuatrimestre
+        ORDER BY dm.Periodo DESC, dm.vchCuatrimestre DESC
+      `);
+
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('❌ Error al obtener periodos del docente:', err);
+    res.status(500).json({ mensaje: 'Error en el servidor' });
+  }
+};
+
+// 🆕 FUNCIÓN ALTERNATIVA: Materias por periodo específico
+const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
+  const { clave, periodo } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    const result = await pool.request()
+      .input('clave', sql.VarChar, clave)
+      .input('periodo', sql.VarChar, periodo || '20251') // Default al periodo actual
+      .query(`
+        SELECT DISTINCT
+          m.vchClvMateria,
+          m.vchNomMateria AS nombreMateria,
+          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
+          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos,
+          dm.vchCuatrimestre,
+          dm.Periodo
+        FROM tbl_docente_materia dm
+        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
+        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
+        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
+        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
+          AND a.vchClvCuatri = dm.vchCuatrimestre
+          AND a.vchPeriodo = dm.Periodo
+        WHERE dm.vchClvTrabajador = @clave
+          AND dm.Periodo = @periodo
+        GROUP BY m.vchClvMateria, m.vchNomMateria, dm.vchCuatrimestre, dm.Periodo
+        ORDER BY m.vchNomMateria
+      `);
+
+    console.log(`✅ Encontradas ${result.recordset.length} materias del periodo ${periodo}`);
+    res.json(result.recordset);
+
+  } catch (err) {
+    console.error('❌ Error al obtener materias por periodo específico:', err);
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
@@ -207,7 +391,7 @@ const crearActividad = async (req, res) => {
   }
 };
 
-// Obtener listas de cotejo - FUNCIÓN MEJORADA DESDE EL PRIMER ARCHIVO
+// Obtener listas de cotejo
 const obtenerListasCotejo = async (req, res) => {
   const { claveDocente, claveMateria } = req.params;
 
@@ -220,7 +404,7 @@ const obtenerListasCotejo = async (req, res) => {
       .query(`
         SELECT 
           id_instrumento,
-          nombre, -- Campo que necesita el frontend (era clave_formato antes)
+          nombre,
           CONCAT('Parcial ', parcial, ' - ', nombre) AS descripcion
         FROM tbl_instrumento
         WHERE vchClvTrabajador = @claveDocente
@@ -235,99 +419,230 @@ const obtenerListasCotejo = async (req, res) => {
   }
 };
 
-// Obtener actividades por grupo
+// Obtener actividades por grupo - VERSIÓN CORREGIDA FINAL
 const obtenerActividadesPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
+  
+  // Filtros opcionales desde query parameters
+  const { parcial, estado, modalidad } = req.query;
 
   try {
     const pool = await sql.connect(config);
     
-    // Consulta principal para obtener actividades del grupo
-    const result = await pool.request()
+    // Construir condiciones WHERE dinámicamente
+    let whereConditions = `
+      WHERE i.vchClvTrabajador = @claveDocente
+        AND i.vchClvMateria = @claveMateria
+        AND ag.id_grupo = @idGrupo
+    `;
+    
+    if (parcial) whereConditions += ` AND i.parcial = @parcial`;
+    if (modalidad) whereConditions += ` AND a.id_modalidad = @modalidad`;
+
+    const request = pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
-      .input('idGrupo', sql.Int, idGrupo)
-      .query(`
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          a.descripcion,
-          a.fecha_creacion,
-          a.id_estado_actividad,
-          ag.fecha_asignacion,
-          ag.fecha_entrega,
-          i.parcial,
-          g.vchGrupo,
-          -- Contar entregas de alumnos
-          (SELECT COUNT(*) 
-           FROM tbl_actividad_alumno aa 
-           WHERE aa.id_actividad = a.id_actividad) AS totalEntregas,
-          -- Contar total de alumnos en el grupo
-          (SELECT COUNT(*) 
-           FROM tblAlumnos al 
-           WHERE al.chvGrupo = @idGrupo) AS totalAlumnos,
-          -- Calcular promedio de calificaciones
-          (SELECT AVG(CAST(ec.calificacion AS FLOAT)) 
-           FROM tbl_actividad_alumno aa 
-           INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
-           WHERE aa.id_actividad = a.id_actividad 
-           AND ec.calificacion IS NOT NULL) AS promedio
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-        WHERE i.vchClvTrabajador = @claveDocente
-          AND i.vchClvMateria = @claveMateria
-          AND ag.id_grupo = @idGrupo
-        ORDER BY i.parcial, a.fecha_creacion DESC
-      `);
-
-    // Agrupar actividades por parcial
-    const actividadesPorParcial = {};
+      .input('idGrupo', sql.Int, idGrupo);
     
+    if (parcial) request.input('parcial', sql.Int, parcial);
+    if (modalidad) request.input('modalidad', sql.Int, modalidad);
+
+    const result = await request.query(`
+      SELECT 
+        a.id_actividad,
+        a.titulo,
+        a.descripcion,
+        a.fecha_creacion,
+        a.numero_actividad,
+        ISNULL(a.id_modalidad, 1) as id_modalidad,
+        a.id_estado_actividad,
+        ag.fecha_asignacion,
+        ag.fecha_entrega,
+        i.parcial,
+        ISNULL(i.nombre, 'Sin nombre') AS nombre_instrumento,
+        g.vchGrupo,
+        
+        -- Estadísticas según modalidad
+        CASE 
+          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+            (SELECT COUNT(DISTINCT aa.vchMatricula) 
+             FROM tbl_actividad_alumno aa 
+             WHERE aa.id_actividad = a.id_actividad)
+          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
+            (SELECT COUNT(DISTINCT ae.id_equipo) 
+             FROM tbl_actividad_equipo ae 
+             WHERE ae.id_actividad = a.id_actividad)
+          ELSE 0
+        END AS totalEntregas,
+        
+        CASE 
+          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+            (SELECT COUNT(*) 
+             FROM tblAlumnos al 
+             INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+               AND al.vchPeriodo = dm.Periodo
+             WHERE al.chvGrupo = @idGrupo 
+               AND dm.vchClvTrabajador = @claveDocente 
+               AND dm.vchClvMateria = @claveMateria)
+          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
+            (SELECT COUNT(DISTINCT ae.id_equipo) 
+             FROM tbl_actividad_equipo ae 
+             WHERE ae.id_actividad = a.id_actividad)
+          ELSE 0
+        END AS totalEsperados,
+        
+        -- Promedio de calificaciones según modalidad
+        CASE 
+          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+            (SELECT AVG(CAST(ec.calificacion AS FLOAT)) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
+             WHERE aa.id_actividad = a.id_actividad 
+               AND ec.calificacion IS NOT NULL)
+          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
+            (SELECT AVG(CAST(ece.calificacion AS FLOAT)) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_evaluacion_criterioActividadEquipo ece ON ae.id_actividad_equipo = ece.id_actividad_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND ece.calificacion IS NOT NULL)
+          ELSE NULL
+        END AS promedio,
+        
+        -- Estado calculado de la actividad (basado en tbl_estado_actividad)
+        CASE 
+          WHEN ISNULL(a.id_estado_actividad, 3) = 1 THEN 'entregado'
+          WHEN ISNULL(a.id_estado_actividad, 3) = 2 THEN 'no_entregado'
+          WHEN ISNULL(a.id_estado_actividad, 3) = 3 THEN 'pendiente'
+          ELSE 'pendiente'
+        END AS estadoCalculado,
+        
+        -- Días restantes
+        DATEDIFF(day, GETDATE(), ag.fecha_entrega) AS diasRestantes,
+        
+        -- Porcentaje de completado
+        CASE 
+          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+            CASE 
+              WHEN (SELECT COUNT(*) FROM tblAlumnos al 
+                    INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                      AND al.vchPeriodo = dm.Periodo
+                    WHERE al.chvGrupo = @idGrupo 
+                      AND dm.vchClvTrabajador = @claveDocente 
+                      AND dm.vchClvMateria = @claveMateria) > 0
+              THEN ROUND((CAST((SELECT COUNT(DISTINCT aa.vchMatricula) 
+                               FROM tbl_actividad_alumno aa 
+                               WHERE aa.id_actividad = a.id_actividad) AS FLOAT) / 
+                         CAST((SELECT COUNT(*) FROM tblAlumnos al 
+                               INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                                 AND al.vchPeriodo = dm.Periodo
+                               WHERE al.chvGrupo = @idGrupo 
+                                 AND dm.vchClvTrabajador = @claveDocente 
+                                 AND dm.vchClvMateria = @claveMateria) AS FLOAT)) * 100, 1)
+              ELSE 0
+            END
+          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 100
+          ELSE 0
+        END AS porcentajeCompletado
+
+      FROM tbl_actividades a
+      INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+      INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+      INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+      ${whereConditions}
+      ORDER BY i.parcial, a.numero_actividad DESC, a.fecha_creacion DESC
+    `);
+
+    console.log(`✅ Encontradas ${result.recordset.length} actividades`);
+
+    // Procesar resultados y agrupar por parcial - SIN SEPARAR POR FECHA
+    const actividadesPorParcial = {};
+    let estadisticasGenerales = {
+      totalActividades: result.recordset.length,
+      entregado: 0,
+      no_entregado: 0,
+      pendiente: 0,
+      promedioGeneral: 0,
+      porcentajeCompletadoGeneral: 0
+    };
+
+    let sumaPromedios = 0;
+    let sumaCompletado = 0;
+    let contadorConPromedio = 0;
+
     result.recordset.forEach(actividad => {
       const parcial = actividad.parcial;
       
       if (!actividadesPorParcial[parcial]) {
-        actividadesPorParcial[parcial] = [];
+        actividadesPorParcial[parcial] = {
+          numero: parcial,
+          nombre: `Parcial ${parcial}`,
+          actividades: [],
+          estadisticas: {
+            total: 0,
+            entregado: 0,
+            no_entregado: 0,
+            pendiente: 0
+          }
+        };
       }
       
-      // Determinar estado de la actividad
-      const ahora = new Date();
-      const fechaEntrega = new Date(actividad.fecha_entrega);
-      const esPendiente = fechaEntrega >= ahora;
+      // Determinar estado y actualizar estadísticas
+      const estado = actividad.estadoCalculado;
+      estadisticasGenerales[estado] = (estadisticasGenerales[estado] || 0) + 1;
+      actividadesPorParcial[parcial].estadisticas[estado] = (actividadesPorParcial[parcial].estadisticas[estado] || 0) + 1;
+      actividadesPorParcial[parcial].estadisticas.total++;
       
-      actividadesPorParcial[parcial].push({
+      // Acumular promedios
+      if (actividad.promedio) {
+        sumaPromedios += actividad.promedio;
+        contadorConPromedio++;
+      }
+      
+      sumaCompletado += actividad.porcentajeCompletado || 0;
+      
+      // Formatear actividad para respuesta
+      actividadesPorParcial[parcial].actividades.push({
         id_actividad: actividad.id_actividad,
         titulo: actividad.titulo,
         descripcion: actividad.descripcion,
         fecha_entrega: actividad.fecha_entrega,
         fecha_asignacion: actividad.fecha_asignacion,
+        numero_actividad: actividad.numero_actividad,
+        modalidad: (actividad.id_modalidad === 2) ? 'equipo' : 'individual',
+        estado: estado,
         totalEntregas: actividad.totalEntregas || 0,
-        totalAlumnos: actividad.totalAlumnos || 0,
+        totalEsperados: actividad.totalEsperados || 0,
         promedio: actividad.promedio ? Number(actividad.promedio.toFixed(1)) : null,
-        estado: esPendiente ? 'pendiente' : 'completada',
-        grupo: actividad.vchGrupo
+        porcentajeCompletado: actividad.porcentajeCompletado || 0,
+        diasRestantes: actividad.diasRestantes,
+        grupo: actividad.vchGrupo,
+        instrumento: actividad.nombre_instrumento,
+        parcial: actividad.parcial,
+        urgente: actividad.diasRestantes <= 2 && estado === 'pendiente',
+        requiereAtencion: (actividad.porcentajeCompletado || 0) < 50 && estado === 'pendiente'
       });
     });
 
-    // Convertir a array ordenado
+    // Calcular estadísticas generales
+    estadisticasGenerales.promedioGeneral = contadorConPromedio > 0 ? 
+      Number((sumaPromedios / contadorConPromedio).toFixed(1)) : 0;
+    estadisticasGenerales.porcentajeCompletadoGeneral = 
+      estadisticasGenerales.totalActividades > 0 ? 
+      Number((sumaCompletado / estadisticasGenerales.totalActividades).toFixed(1)) : 0;
+
+    // Convertir parciales a array ordenado
     const parciales = Object.keys(actividadesPorParcial)
       .map(Number)
       .sort((a, b) => a - b)
-      .map(parcial => ({
-        numero: parcial,
-        nombre: `Parcial ${parcial}`,
-        actividades: actividadesPorParcial[parcial]
-      }));
+      .map(parcial => actividadesPorParcial[parcial]);
 
+    console.log(`📊 Estadísticas: ${estadisticasGenerales.totalActividades} total`);
+
+    // RESPUESTA SIMPLE - Solo parciales (sin sección pendientes por ahora)
     res.json({
       parciales,
-      totalPendientes: result.recordset.filter(a => {
-        const ahora = new Date();
-        const fechaEntrega = new Date(a.fecha_entrega);
-        return fechaEntrega >= ahora;
-      }).length
+      estadisticas: estadisticasGenerales,
+      totalPendientes: estadisticasGenerales.pendiente
     });
 
   } catch (error) {
@@ -335,39 +650,6 @@ const obtenerActividadesPorGrupo = async (req, res) => {
     res.status(500).json({ mensaje: 'Error interno del servidor' });
   }
 };
-
-// Obtener materias completas
-const obtenerMateriasCompletas = async (req, res) => {
-  const { clave } = req.params;
-
-  try {
-    const pool = await sql.connect(config);
-    const result = await pool.request()
-      .input('clave', sql.VarChar, clave)
-      .query(`
-        SELECT DISTINCT
-          m.vchClvMateria,
-          m.vchNomMateria AS nombreMateria,
-          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
-          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos
-        FROM tbl_docente_materia dm
-        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
-        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
-        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
-        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
-          AND a.vchClvCuatri = dm.vchCuatrimestre
-          AND a.vchPeriodo = dm.Periodo
-        WHERE dm.vchClvTrabajador = @clave
-        GROUP BY m.vchClvMateria, m.vchNomMateria
-      `);
-
-    res.json(result.recordset);
-  } catch (err) {
-    console.error('❌ Error al obtener materias completas:', err);
-    res.status(500).json({ mensaje: 'Error en el servidor' });
-  }
-};
-
 // Cambiar contraseña del docente
 const cambiarContrasenaDocente = async (req, res) => {
   const { usuario, contrasenaActual, nuevaContrasena } = req.body;
@@ -413,7 +695,7 @@ const cambiarContrasenaDocente = async (req, res) => {
 };
 
 // ===============================================
-// NUEVAS FUNCIONES AGREGADAS DESDE EL PRIMER ARCHIVO
+// FUNCIONES PARA MANEJO DE EQUIPOS
 // ===============================================
 
 // Obtener equipos existentes de un grupo específico
@@ -833,24 +1115,413 @@ const crearActividadCompleta = async (req, res) => {
 };
 
 // ===============================================
-// EXPORTS ACTUALIZADOS
+// 🆕 FUNCIONES PARA CALIFICAR ACTIVIDADES
+// ===============================================
+
+// Obtener datos de actividad para calificar
+const obtenerDatosActividad = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          a.id_actividad,
+          a.titulo,
+          a.descripcion,
+          a.numero_actividad,
+          a.id_modalidad,
+          i.id_instrumento,
+          i.nombre as nombre_instrumento,
+          i.parcial,
+          i.valor_total,
+          ag.fecha_entrega,
+          g.vchGrupo,
+          m.vchNomMateria
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+        INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria
+        WHERE a.id_actividad = @idActividad
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ error: 'Actividad no encontrada' });
+    }
+
+    res.json(result.recordset[0]);
+  } catch (error) {
+    console.error('❌ Error al obtener datos de actividad:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// ===============================================
+// FUNCIONES CORREGIDAS DEL BACKEND - VERSIÓN FINAL
+// ===============================================
+
+// Obtener criterios de evaluación de una actividad
+const obtenerCriteriosActividad = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el instrumento de la actividad
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT i.id_instrumento
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        WHERE a.id_actividad = @idActividad
+      `);
+
+    if (instrumentoResult.recordset.length === 0) {
+      return res.status(404).json({ error: 'Instrumento no encontrado' });
+    }
+
+    const idInstrumento = instrumentoResult.recordset[0].id_instrumento;
+
+    // Obtener criterios del instrumento
+    const criteriosResult = await pool.request()
+      .input('idInstrumento', sql.Int, idInstrumento)
+      .query(`
+        SELECT 
+          id_criterio,
+          nombre,
+          descripcion,
+          valor_maximo
+        FROM tbl_criterios
+        WHERE id_instrumento = @idInstrumento
+        ORDER BY id_criterio
+      `);
+
+    // Mapear los resultados con nombres consistentes
+    const criterios = criteriosResult.recordset.map(criterio => ({
+      id_criterio: criterio.id_criterio,
+      nombre_criterio: criterio.nombre,
+      descripcion: criterio.descripcion,
+      valor_maximo: criterio.valor_maximo
+    }));
+
+    res.json(criterios);
+  } catch (error) {
+    console.error('❌ Error al obtener criterios:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
+const obtenerEquiposParaCalificar = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el valor total del instrumento y todos los criterios
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          i.valor_total,
+          SUM(c.valor_maximo) as suma_maxima_criterios
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
+        WHERE a.id_actividad = @idActividad
+        GROUP BY i.valor_total
+      `);
+    
+    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
+    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
+
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .input('valorTotal', sql.Float, valorTotal)
+      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
+      .query(`
+        SELECT 
+          ae.id_actividad_equipo,
+          e.id_equipo,
+          e.nombre_equipo,
+          -- Integrantes del equipo
+          STUFF((
+            SELECT ', ' + al2.vchNombre + ' ' + ISNULL(al2.vchAPaterno, '')
+            FROM tbl_equipo_alumno ea2
+            INNER JOIN tblAlumnos al2 ON ea2.vchMatricula = al2.vchMatricula
+            WHERE ea2.id_equipo = e.id_equipo
+            FOR XML PATH('')
+          ), 1, 2, '') as integrantes,
+          (SELECT COUNT(*) FROM tbl_equipo_alumno ea3 WHERE ea3.id_equipo = e.id_equipo) as totalIntegrantes,
+          -- Verificar si ya está calificado
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ece 
+              WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
+            ) THEN 1 
+            ELSE 0 
+          END as yaCalificado,
+          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
+          (SELECT 
+             ROUND(SUM(CAST(ece2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
+           FROM tbl_evaluacion_criterioActividadEquipo ece2
+           WHERE ece2.id_actividad_equipo = ae.id_actividad_equipo
+          ) as calificacionTotal
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+        WHERE ae.id_actividad = @idActividad
+        ORDER BY e.nombre_equipo
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener equipos para calificar:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener alumnos para calificar (modalidad individual) - CÁLCULO COMPLETAMENTE CORREGIDO
+const obtenerAlumnosParaCalificar = async (req, res) => {
+  const { idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    // Primero obtener el valor total del instrumento y todos los criterios
+    const instrumentoResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          i.valor_total,
+          SUM(c.valor_maximo) as suma_maxima_criterios
+        FROM tbl_actividades a
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
+        WHERE a.id_actividad = @idActividad
+        GROUP BY i.valor_total
+      `);
+    
+    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
+    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
+
+    const result = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .input('valorTotal', sql.Float, valorTotal)
+      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
+      .query(`
+        SELECT 
+          aa.id_actividad_alumno,
+          aa.vchMatricula,
+          al.vchNombre + ' ' + ISNULL(al.vchAPaterno, '') + ' ' + ISNULL(al.vchAMaterno, '') as nombreCompleto,
+          -- Verificar si ya está calificado
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividad ec 
+              WHERE ec.id_actividad_alumno = aa.id_actividad_alumno
+            ) THEN 1 
+            ELSE 0 
+          END as yaCalificado,
+          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
+          (SELECT 
+             ROUND(SUM(CAST(ec2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
+           FROM tbl_evaluacion_criterioActividad ec2
+           WHERE ec2.id_actividad_alumno = aa.id_actividad_alumno
+          ) as calificacionTotal
+        FROM tbl_actividad_alumno aa
+        INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+        WHERE aa.id_actividad = @idActividad
+        ORDER BY al.vchNombre, al.vchAPaterno
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener alumnos para calificar:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+// Obtener calificaciones existentes de un alumno - CORREGIDA
+const obtenerCalificacionesAlumno = async (req, res) => {
+  const { idActividadAlumno } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividadAlumno', sql.Int, idActividadAlumno)
+      .query(`
+        SELECT 
+          ec.id_criterio,
+          ec.calificacion,
+          c.nombre as nombre_criterio,
+          c.valor_maximo
+        FROM tbl_evaluacion_criterioActividad ec
+        INNER JOIN tbl_criterios c ON ec.id_criterio = c.id_criterio
+        WHERE ec.id_actividad_alumno = @idActividadAlumno
+        ORDER BY c.id_criterio
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener calificaciones del alumno:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Obtener calificaciones existentes de un equipo - CORREGIDA
+const obtenerCalificacionesEquipo = async (req, res) => {
+  const { idActividadEquipo } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    const result = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT 
+          ece.id_criterio,
+          ece.calificacion,
+          c.nombre as nombre_criterio,
+          c.valor_maximo
+        FROM tbl_evaluacion_criterioActividadEquipo ece
+        INNER JOIN tbl_criterios c ON ece.id_criterio = c.id_criterio
+        WHERE ece.id_actividad_equipo = @idActividadEquipo
+        ORDER BY c.id_criterio
+      `);
+
+    res.json(result.recordset);
+  } catch (error) {
+    console.error('❌ Error al obtener calificaciones del equipo:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Guardar calificaciones de un alumno
+const guardarCalificacionesAlumno = async (req, res) => {
+  const { idActividadAlumno, calificaciones } = req.body;
+  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
+
+  const transaction = new sql.Transaction();
+
+  try {
+    const pool = await sql.connect(config);
+    await transaction.begin();
+
+    // Eliminar calificaciones existentes
+    await transaction.request()
+      .input('idActividadAlumno', sql.Int, idActividadAlumno)
+      .query(`
+        DELETE FROM tbl_evaluacion_criterioActividad 
+        WHERE id_actividad_alumno = @idActividadAlumno
+      `);
+
+    // Insertar nuevas calificaciones
+    for (const cal of calificaciones) {
+      await transaction.request()
+        .input('idActividadAlumno', sql.Int, idActividadAlumno)
+        .input('idCriterio', sql.Int, cal.id_criterio)
+        .input('calificacion', sql.Float, cal.calificacion)
+        .query(`
+          INSERT INTO tbl_evaluacion_criterioActividad (
+            id_actividad_alumno, id_criterio, calificacion
+          ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
+        `);
+    }
+
+    await transaction.commit();
+    res.json({ mensaje: 'Calificaciones guardadas correctamente' });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error al guardar calificaciones del alumno:', error);
+    res.status(500).json({ error: 'Error al guardar calificaciones' });
+  }
+};
+
+// Guardar calificaciones de un equipo
+const guardarCalificacionesEquipo = async (req, res) => {
+  const { idActividadEquipo, idEquipo, calificaciones } = req.body;
+  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
+
+  const transaction = new sql.Transaction();
+
+  try {
+    const pool = await sql.connect(config);
+    await transaction.begin();
+
+    // Eliminar calificaciones existentes
+    await transaction.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        DELETE FROM tbl_evaluacion_criterioActividadEquipo 
+        WHERE id_actividad_equipo = @idActividadEquipo
+      `);
+
+    // Insertar nuevas calificaciones
+    for (const cal of calificaciones) {
+      await transaction.request()
+        .input('idEquipo', sql.Int, idEquipo)
+        .input('idActividadEquipo', sql.Int, idActividadEquipo)
+        .input('idCriterio', sql.Int, cal.id_criterio)
+        .input('calificacion', sql.Float, cal.calificacion)
+        .query(`
+          INSERT INTO tbl_evaluacion_criterioActividadEquipo (
+            id_equipo, id_actividad_equipo, id_criterio, calificacion
+          ) VALUES (@idEquipo, @idActividadEquipo, @idCriterio, @calificacion)
+        `);
+    }
+
+    await transaction.commit();
+    res.json({ mensaje: 'Calificaciones del equipo guardadas correctamente' });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('❌ Error al guardar calificaciones del equipo:', error);
+    res.status(500).json({ error: 'Error al guardar calificaciones del equipo' });
+  }
+};
+
+// ===============================================
+// EXPORTS COMPLETOS
 // ===============================================
 module.exports = {
+  // Funciones básicas del docente
   obtenerDatosDocente,
-  obtenerMateriasPorDocente,
+  obtenerPerfilDocente,
+  cambiarContrasenaDocente,
+  
+  // Funciones de materias (ORIGINAL y CON FILTRO DE PERIODO)
+  obtenerMateriasPorDocente, // Sin filtro de periodo
+  obtenerMateriasCompletas, // 🆕 CON FILTRO DE PERIODO ACTUAL
+  
+  // 🆕 Funciones nuevas para manejo de periodos
+  obtenerPeriodoActual,
+  obtenerPeriodosDocente,
+  obtenerMateriasCompletasPorPeriodo,
+  
+  // Funciones de grupos y actividades
   obtenerGruposPorMateriaDocente,
-  crearActividad,
   obtenerListasCotejo,
   obtenerActividadesPorGrupo,
-  obtenerMateriasCompletas, // ← MANTENIDO
-  cambiarContrasenaDocente,
-  obtenerPerfilDocente,
-  // ===============================================
-  // NUEVAS FUNCIONES AGREGADAS DESDE EL PRIMER ARCHIVO
-  // ===============================================
+  
+  // Funciones de creación de actividades
+  crearActividad,
+  crearActividadCompleta,
+  
+  // Funciones de manejo de equipos
   obtenerEquiposPorGrupo,
   obtenerAlumnosPorGrupo,
   simularEquiposAleatorios,
   obtenerActividadesConEquiposPorGrupo,
-  crearActividadCompleta
+
+  // Funciones de calificación
+  obtenerDatosActividad,
+  obtenerCriteriosActividad,
+  obtenerAlumnosParaCalificar,
+  obtenerEquiposParaCalificar,
+  obtenerCalificacionesAlumno,
+  obtenerCalificacionesEquipo,
+  guardarCalificacionesAlumno,
+  guardarCalificacionesEquipo
 };
