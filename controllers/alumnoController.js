@@ -899,10 +899,371 @@ const obtenerDetalleActividad = async (req, res) => {
   }
 };
 
+// Obtener actividades entregadas/calificadas del alumno
+const obtenerActividadesEntregadas = async (req, res) => {
+  const { matricula } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    console.log(`📝 === INICIO OBTENER ACTIVIDADES ENTREGADAS ===`);
+    console.log(`📋 Matrícula: ${matricula}`);
+
+    // PASO 1: Obtener datos del alumno
+    const alumnoResult = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .query(`
+        SELECT 
+          vchPeriodo,
+          chvGrupo,
+          vchClvCuatri
+        FROM tblAlumnos 
+        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
+      `);
+
+    if (alumnoResult.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Alumno no encontrado' });
+    }
+
+    const alumno = alumnoResult.recordset[0];
+
+    // PASO 2: Obtener TODAS las actividades entregadas
+    const result = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('periodo_alumno', sql.VarChar, alumno.vchPeriodo)
+      .input('grupo_alumno', sql.VarChar, alumno.chvGrupo)
+      .query(`
+        WITH ActividadesEntregadas AS (
+          -- MODALIDAD 1: INDIVIDUAL
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            a.descripcion,
+            CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
+            ea.nombre_estado as estado,
+            ins.nombre as instrumento,
+            m.vchNomMateria as materia,
+            CASE 
+              WHEN ins.parcial = 1 THEN 'Parcial 1'
+              WHEN ins.parcial = 2 THEN 'Parcial 2'
+              WHEN ins.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            'Individual' as modalidad_tipo,
+            1 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria
+          INNER JOIN tbl_estado_actividad ea ON ea.id_estado_actividad = a.id_estado_actividad
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
+          WHERE aa.vchMatricula = @matricula 
+          AND ins.vchPeriodo = @periodo_alumno
+          AND a.id_modalidad = 1
+
+          UNION ALL
+
+          -- MODALIDAD 2: EQUIPO
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            a.descripcion,
+            CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
+            ea.nombre_estado as estado,
+            ins.nombre as instrumento,
+            m.vchNomMateria as materia,
+            CASE 
+              WHEN ins.parcial = 1 THEN 'Parcial 1'
+              WHEN ins.parcial = 2 THEN 'Parcial 2'
+              WHEN ins.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            'Equipo' as modalidad_tipo,
+            2 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria
+          INNER JOIN tbl_estado_actividad ea ON ea.id_estado_actividad = a.id_estado_actividad
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
+          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+          INNER JOIN tbl_equipo_alumno ea_alumno ON e.id_equipo = ea_alumno.id_equipo
+          WHERE ea_alumno.vchMatricula = @matricula 
+          AND ins.vchPeriodo = @periodo_alumno
+          AND a.id_modalidad = 2
+
+          UNION ALL
+
+          -- MODALIDAD 3: GRUPO
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            a.descripcion,
+            CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
+            ea.nombre_estado as estado,
+            ins.nombre as instrumento,
+            m.vchNomMateria as materia,
+            CASE 
+              WHEN ins.parcial = 1 THEN 'Parcial 1'
+              WHEN ins.parcial = 2 THEN 'Parcial 2'
+              WHEN ins.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            'Grupo' as modalidad_tipo,
+            3 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria
+          INNER JOIN tbl_estado_actividad ea ON ea.id_estado_actividad = a.id_estado_actividad
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+          WHERE g.vchGrupo = @grupo_alumno 
+          AND ins.vchPeriodo = @periodo_alumno
+          AND a.id_modalidad = 3
+        ),
+        ActividadesSinDuplicados AS (
+          SELECT 
+            id_actividad,
+            titulo,
+            descripcion,
+            fecha_entrega,
+            estado,
+            instrumento,
+            materia,
+            parcial,
+            modalidad_tipo,
+            ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
+          FROM ActividadesEntregadas
+        )
+        SELECT 
+          id_actividad,
+          titulo,
+          descripcion,
+          fecha_entrega,
+          estado,
+          instrumento,
+          materia,
+          parcial,
+          modalidad_tipo
+        FROM ActividadesSinDuplicados
+        WHERE rn = 1
+        ORDER BY fecha_entrega DESC, titulo ASC
+      `);
+
+    console.log(`✅ Actividades entregadas encontradas: ${result.recordset.length}`);
+
+    // PASO 3: Agrupar por parcial
+    const actividadesPorParcial = {
+      'Parcial 1': [],
+      'Parcial 2': [],
+      'Parcial 3': []
+    };
+
+    result.recordset.forEach(actividad => {
+      if (actividadesPorParcial[actividad.parcial]) {
+        // Simular calificación para mostrar en el resumen
+        const calificacion = Math.round((Math.random() * 4 + 6) * 10) / 10;
+        
+        actividadesPorParcial[actividad.parcial].push({
+          id_actividad: actividad.id_actividad,
+          titulo: actividad.titulo,
+          descripcion: actividad.descripcion,
+          fecha_entrega: actividad.fecha_entrega,
+          estado: actividad.estado,
+          instrumento: actividad.instrumento,
+          materia: actividad.materia,
+          modalidad: actividad.modalidad_tipo,
+          calificacion: calificacion // Simulada
+        });
+      }
+    });
+
+    console.log(`📊 Distribución por parciales:`);
+    Object.entries(actividadesPorParcial).forEach(([parcial, actividades]) => {
+      console.log(`   - ${parcial}: ${actividades.length} actividades`);
+    });
+
+    console.log(`📝 === FIN OBTENER ACTIVIDADES ENTREGADAS ===`);
+
+    res.json(actividadesPorParcial);
+
+  } catch (error) {
+    console.error('❌ Error al obtener actividades entregadas:', error);
+    res.status(500).json({ 
+      mensaje: 'Error en el servidor al obtener actividades entregadas',
+      error: error.message 
+    });
+  }
+};
+
+// Obtener detalles de una actividad entregada/calificada
+const obtenerActividadEntregada = async (req, res) => {
+  const { matricula, idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    console.log(`🎯 === INICIO DEBUG ACTIVIDAD ENTREGADA ===`);
+    console.log(`📋 Parámetros recibidos:`);
+    console.log(`   - Matrícula: ${matricula}`);
+    console.log(`   - ID Actividad: ${idActividad}`);
+
+    // PASO 1: Verificar acceso y obtener datos del alumno
+    const alumnoResult = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .query(`
+        SELECT 
+          vchPeriodo,
+          chvGrupo,
+          vchClvCuatri,
+          vchNombre + ' ' + vchAPaterno + ' ' + ISNULL(vchAMaterno, '') as nombre_completo
+        FROM tblAlumnos 
+        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
+      `);
+
+    if (alumnoResult.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Alumno no encontrado' });
+    }
+
+    const alumno = alumnoResult.recordset[0];
+    console.log(`👤 Alumno: ${alumno.nombre_completo}, Periodo: ${alumno.vchPeriodo}`);
+
+    // PASO 2: Obtener detalles completos de la actividad
+    const result = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT 
+          AC.id_actividad,
+          AC.titulo,
+          AC.descripcion,
+          CONVERT(VARCHAR, AG.fecha_asignacion, 126) as fecha_asignacion,
+          CONVERT(VARCHAR, AG.fecha_entrega, 126) as fecha_entrega,
+          EA.nombre_estado as estado,
+          I.nombre as instrumento,
+          I.valor_total as puntos_total,
+          TI.nombre_tipo as tipoInstrumento,
+          M.vchNomMateria as materia,
+          CONCAT(D.vchNombre, ' ', D.vchAPaterno, ' ', ISNULL(D.vchAMaterno, '')) AS docente,
+          CASE 
+            WHEN I.parcial = 1 THEN 'Parcial 1'
+            WHEN I.parcial = 2 THEN 'Parcial 2'
+            WHEN I.parcial = 3 THEN 'Parcial 3'
+            ELSE 'Actividad General'
+          END as parcial,
+          AC.id_modalidad,
+          CASE 
+            WHEN AC.id_modalidad = 1 THEN 'Individual'
+            WHEN AC.id_modalidad = 2 THEN 'Equipo'
+            WHEN AC.id_modalidad = 3 THEN 'Grupo'
+            ELSE 'Desconocida'
+          END as modalidad_nombre
+        FROM tbl_actividades AC
+        INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
+        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria
+        INNER JOIN tbl_estado_actividad EA ON EA.id_estado_actividad = AC.id_estado_actividad
+        INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
+        INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
+        INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
+        WHERE AC.id_actividad = @idActividad
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ mensaje: 'Actividad no encontrada' });
+    }
+
+    const actividad = result.recordset[0];
+
+    // PASO 3: Simular datos de calificación (aquí puedes consultar tus tablas reales)
+    const puntosTotal = actividad.puntos_total || 10;
+    const calificacion = Math.round((Math.random() * 4 + 6) * 10) / 10; // 6.0 - 10.0
+    const puntosObtenidos = Math.round((calificacion / 10) * puntosTotal);
+    
+    // Simular fecha de entrega del alumno
+    const fechaEntrega = new Date(actividad.fecha_entrega);
+    const diasDiferencia = Math.floor(Math.random() * 3) - 1; // -1, 0, 1 día
+    fechaEntrega.setDate(fechaEntrega.getDate() + diasDiferencia);
+    const entregaPuntual = diasDiferencia <= 0;
+
+    // PASO 4: Generar rúbrica
+    const rubrica = [
+      {
+        criterio: 'Comprensión del tema y contenido correcto',
+        puntos_maximos: Math.round(puntosTotal * 0.4),
+        puntos_obtenidos: Math.round(puntosObtenidos * 0.4),
+        cumplido: calificacion >= 7,
+        icono: calificacion >= 7 ? '✅' : '❌'
+      },
+      {
+        criterio: 'Presentación clara y bien estructurada',
+        puntos_maximos: Math.round(puntosTotal * 0.3),
+        puntos_obtenidos: Math.round(puntosObtenidos * 0.3),
+        cumplido: calificacion >= 6,
+        icono: calificacion >= 6 ? '✅' : '❌'
+      },
+      {
+        criterio: 'Entrega puntual y formato adecuado',
+        puntos_maximos: Math.round(puntosTotal * 0.3),
+        puntos_obtenidos: entregaPuntual ? Math.round(puntosTotal * 0.3) : Math.round(puntosTotal * 0.1),
+        cumplido: entregaPuntual,
+        icono: entregaPuntual ? '✅' : '❌'
+      }
+    ];
+
+    // PASO 5: Generar retroalimentación
+    const retroalimentaciones = [
+      "Excelente trabajo, demuestra dominio del tema.",
+      "Buen desarrollo, pero hay áreas de mejora.",
+      "Trabajo satisfactorio. Revisa algunos detalles.",
+      "Cumple con los objetivos básicos del curso."
+    ];
+    const retroalimentacion = retroalimentaciones[Math.floor(Math.random() * retroalimentaciones.length)];
+
+    // PASO 6: Formatear respuesta
+    const response = {
+      id_actividad: actividad.id_actividad,
+      titulo: actividad.titulo,
+      descripcion: actividad.descripcion || 'Sin descripción disponible',
+      fecha_asignacion: actividad.fecha_asignacion,
+      fecha_entrega: actividad.fecha_entrega,
+      fecha_entrega_alumno: fechaEntrega.toISOString(),
+      estado: 'Calificada',
+      instrumento: actividad.instrumento,
+      tipoInstrumento: actividad.tipoInstrumento,
+      materia: actividad.materia,
+      docente: actividad.docente,
+      parcial: actividad.parcial,
+      puntos_total: puntosTotal,
+      puntos_obtenidos: puntosObtenidos,
+      calificacion: calificacion,
+      observaciones: 'Actividad completada correctamente.',
+      retroalimentacion: retroalimentacion,
+      id_modalidad: actividad.id_modalidad,
+      modalidad_nombre: actividad.modalidad_nombre,
+      rubrica: rubrica,
+      entrega_puntual: entregaPuntual
+    };
+
+    console.log(`✅ Actividad entregada obtenida: ${response.titulo} - Calificación: ${calificacion}`);
+    console.log(`🎯 === FIN DEBUG ACTIVIDAD ENTREGADA ===`);
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('❌ Error al obtener actividad entregada:', error);
+    res.status(500).json({ 
+      mensaje: 'Error en el servidor al obtener actividad entregada',
+      error: error.message 
+    });
+  }
+};
+
 module.exports = {
   obtenerDatosAlumno,
   cambiarContrasena,
   obtenerActividadesPorAlumno,
   obtenerCalificacionesHistoricas, 
-  obtenerDetalleActividad
+  obtenerDetalleActividad,
+  obtenerActividadesEntregadas,
+  obtenerActividadEntregada
 };
