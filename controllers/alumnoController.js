@@ -1214,6 +1214,339 @@ const obtenerActividadesEntregadas = async (req, res) => {
   }
 };
 
+// FUNCIONES AUXILIARES PARA CALIFICACIONES DINÁMICAS
+const obtenerCalificacionDesdeVista = async (pool, matricula, idActividad) => {
+  try {
+    const result = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT TOP 1
+          CalificacionObtenida,
+          PromedioActividades,
+          CalificacionExamen,
+          CalificacionFinal,
+          ValorActividad
+        FROM vw_Calificaciones_Final
+        WHERE Matricula = @matricula
+        AND NumeroActividad = @idActividad
+      `);
+
+    if (result.recordset.length > 0) {
+      return {
+        calificacionObtenida: result.recordset[0].CalificacionObtenida,
+        promedioActividades: result.recordset[0].PromedioActividades,
+        calificacionExamen: result.recordset[0].CalificacionExamen,
+        calificacionFinal: result.recordset[0].CalificacionFinal,
+        valorActividad: result.recordset[0].ValorActividad
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Error al obtener calificación desde vista:', error);
+    return null;
+  }
+};
+
+const obtenerDetalleActividadConCalificacion = async (req, res) => {
+  const { matricula, idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    // 1. Obtener información básica de la actividad
+    const actividadQuery = `
+      SELECT 
+        a.id_actividad, a.titulo, a.descripcion, 
+        CONVERT(varchar, a.fecha_asignacion, 120) AS fecha_asignacion,
+        CONVERT(varchar, a.fecha_entrega, 120) AS fecha_entrega,
+        i.vchNombreInstrumento AS instrumento,
+        i.vchTipoInstrumento AS tipoInstrumento,
+        m.vchNomMateria AS materia,
+        d.vchNombre + ' ' + d.vchAPaterno + ' ' + d.vchAMaterno AS docente,
+        i.parcial,
+        i.valor_total AS puntos_total,
+        mod.id_modalidad, mod.vchNombreModalidad AS modalidad_nombre,
+        ISNULL(aa.estado, 'pendiente') AS estado,
+        CONVERT(varchar, aa.fecha_entrega, 120) AS fecha_entrega_alumno,
+        CASE 
+          WHEN aa.fecha_entrega IS NULL AND GETDATE() > a.fecha_entrega THEN 'vencido'
+          WHEN aa.fecha_entrega IS NULL THEN 'pendiente'
+          WHEN aa.fecha_entrega > a.fecha_entrega THEN 'entregado tardío'
+          ELSE 'entregado'
+        END AS estado_entrega
+      FROM tbl_actividades a
+      INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+      INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria
+      INNER JOIN tbl_docentes d ON a.vchClvTrabajador = d.vchClvTrabajador
+      LEFT JOIN tbl_modalidades mod ON i.id_modalidad = mod.id_modalidad
+      LEFT JOIN tbl_actividad_alumno aa ON aa.id_actividad = a.id_actividad AND aa.vchMatricula = @matricula
+      WHERE a.id_actividad = @idActividad
+    `;
+
+    const actividadResult = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(actividadQuery);
+
+    if (actividadResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        mensaje: 'Actividad no encontrada o no asignada al alumno',
+        codigo: 'ACTIVIDAD_NO_ENCONTRADA'
+      });
+    }
+
+    let actividad = actividadResult.recordset[0];
+    actividad.estado = actividad.estado_entrega; // Usamos el estado calculado
+
+    // 2. Obtener la rúbrica/criterios de evaluación
+    const rubricaQuery = `
+      SELECT 
+        c.id_criterio,
+        c.vchCriterio AS criterio,
+        c.vchDescripcion AS descripcion,
+        c.decValorMaximo AS puntos,
+        c.vchIcono AS icono,
+        ec.calificacion AS puntos_obtenidos,
+        CASE 
+          WHEN ec.calificacion IS NOT NULL THEN 1
+          ELSE 0
+        END AS calificado,
+        CASE 
+          WHEN ec.calificacion >= (c.decValorMaximo * 0.6) THEN 1
+          ELSE 0
+        END AS cumplido
+      FROM tbl_criterios c
+      LEFT JOIN tbl_evaluacion_criterioActividad ec ON ec.id_criterio = c.id_criterio
+          AND ec.id_actividad_alumno = (
+              SELECT id_actividad_alumno 
+              FROM tbl_actividad_alumno 
+              WHERE id_actividad = @idActividad AND vchMatricula = @matricula
+          )
+      WHERE c.id_instrumento = (
+          SELECT id_instrumento FROM tbl_actividades WHERE id_actividad = @idActividad
+      )
+      ORDER BY c.id_criterio
+    `;
+
+    const rubrica = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(rubricaQuery);
+
+    // 3. Obtener información de calificación desde vw_Calificaciones_Final
+    const calificacionData = await obtenerCalificacionDesdeVista(pool, matricula, idActividad);
+
+    // 4. Calcular información de criterios
+    const criteriosCalificados = rubrica.recordset.filter(c => c.calificado).length;
+    const totalCriterios = rubrica.recordset.length;
+    const tieneCriterios = totalCriterios > 0;
+
+    let mensajeEstado = '';
+    if (tieneCriterios) {
+      if (criteriosCalificados === totalCriterios) {
+        mensajeEstado = 'Todos los criterios han sido calificados';
+      } else if (criteriosCalificados > 0) {
+        mensajeEstado = `Parcialmente calificada (${criteriosCalificados}/${totalCriterios} criterios)`;
+      } else {
+        mensajeEstado = 'Criterios definidos pero aún no calificados';
+      }
+    } else {
+      mensajeEstado = 'Esta actividad no tiene criterios específicos de evaluación';
+    }
+
+    // 5. Preparar respuesta
+    const response = {
+      ...actividad,
+      rubrica: rubrica.recordset,
+      criterios_info: {
+        instrumento_tiene_criterios: tieneCriterios,
+        total_criterios_definidos: totalCriterios,
+        criterios_calificados: criteriosCalificados,
+        mensaje_estado: mensajeEstado,
+        mostrar_rubrica: tieneCriterios,
+        tipo_rubrica: 'real'
+      }
+    };
+
+    // 6. Agregar información de calificación si existe
+    if (calificacionData) {
+      response.tiene_calificacion = true;
+      response.calificacion_info = {
+        puntos_obtenidos: calificacionData.calificacionObtenida || 0,
+        calificacion_sobre_10: calificacionData.calificacionFinal || 0,
+        criterios_calificados: criteriosCalificados,
+        valor_actividad: calificacionData.valorActividad || 0
+      };
+      
+      // Actualizar estado si está calificada
+      if (response.estado !== 'calificada' && calificacionData.calificacionFinal !== null) {
+        response.estado = 'calificada';
+      }
+    } else {
+      response.tiene_calificacion = false;
+    }
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Error en obtenerDetalleActividadConCalificacion:', error);
+    res.status(500).json({ 
+      mensaje: 'Error al obtener la actividad',
+      error: error.message,
+      codigo: 'ERROR_SERVIDOR'
+    });
+  }
+};
+
+const obtenerActividadEntregadaConCalificacion = async (req, res) => {
+  const { matricula, idActividad } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+
+    // 1. Verificar si la actividad está entregada
+    const entregaQuery = `
+      SELECT 
+        estado, 
+        CONVERT(varchar, fecha_entrega, 120) AS fecha_entrega,
+        observaciones, 
+        retroalimentacion
+      FROM tbl_actividad_alumno
+      WHERE id_actividad = @idActividad AND vchMatricula = @matricula
+    `;
+
+    const entregaResult = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(entregaQuery);
+
+    if (entregaResult.recordset.length === 0 || entregaResult.recordset[0].estado === 'pendiente') {
+      return res.status(404).json({ 
+        mensaje: 'La actividad no ha sido entregada o no existe',
+        codigo: 'ACTIVIDAD_NO_ENTREGADA'
+      });
+    }
+
+    // 2. Obtener información básica de la actividad
+    const actividadQuery = `
+      SELECT 
+        a.id_actividad, a.titulo, a.descripcion, 
+        CONVERT(varchar, a.fecha_asignacion, 120) AS fecha_asignacion,
+        CONVERT(varchar, a.fecha_entrega, 120) AS fecha_entrega,
+        i.vchNombreInstrumento AS instrumento,
+        i.vchTipoInstrumento AS tipoInstrumento,
+        m.vchNomMateria AS materia,
+        d.vchNombre + ' ' + d.vchAPaterno + ' ' + d.vchAMaterno AS docente,
+        i.parcial,
+        i.valor_total AS puntos_total,
+        mod.id_modalidad, mod.vchNombreModalidad AS modalidad_nombre,
+        aa.estado,
+        CONVERT(varchar, aa.fecha_entrega, 120) AS fecha_entrega_alumno,
+        aa.observaciones,
+        aa.retroalimentacion,
+        CASE 
+          WHEN aa.fecha_entrega <= a.fecha_entrega THEN 1
+          ELSE 0
+        END AS entrega_puntual
+      FROM tbl_actividades a
+      INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+      INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria
+      INNER JOIN tbl_docentes d ON a.vchClvTrabajador = d.vchClvTrabajador
+      LEFT JOIN tbl_modalidades mod ON i.id_modalidad = mod.id_modalidad
+      INNER JOIN tbl_actividad_alumno aa ON aa.id_actividad = a.id_actividad AND aa.vchMatricula = @matricula
+      WHERE a.id_actividad = @idActividad
+    `;
+
+    const actividadResult = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(actividadQuery);
+
+    if (actividadResult.recordset.length === 0) {
+      return res.status(404).json({ 
+        mensaje: 'Actividad no encontrada',
+        codigo: 'ACTIVIDAD_NO_ENCONTRADA'
+      });
+    }
+
+    const actividad = actividadResult.recordset[0];
+
+    // 3. Obtener calificación desde vw_Calificaciones_Final
+    const calificacionData = await obtenerCalificacionDesdeVista(pool, matricula, idActividad);
+
+    if (!calificacionData) {
+      return res.status(404).json({ 
+        mensaje: 'La actividad no ha sido calificada aún',
+        codigo: 'SIN_CALIFICAR'
+      });
+    }
+
+    // 4. Obtener la rúbrica/criterios de evaluación
+    const rubricaQuery = `
+      SELECT 
+        c.vchCriterio AS criterio,
+        c.vchDescripcion AS descripcion,
+        c.decValorMaximo AS puntos_maximos,
+        ec.calificacion AS puntos_obtenidos,
+        CASE 
+          WHEN ec.calificacion >= (c.decValorMaximo * 0.6) THEN 1
+          ELSE 0
+        END AS cumplido,
+        c.vchIcono AS icono,
+        1 AS calificado
+      FROM tbl_criterios c
+      INNER JOIN tbl_evaluacion_criterioActividad ec ON ec.id_criterio = c.id_criterio
+      WHERE ec.id_actividad_alumno = (
+        SELECT id_actividad_alumno 
+        FROM tbl_actividad_alumno 
+        WHERE id_actividad = @idActividad AND vchMatricula = @matricula
+      )
+      ORDER BY c.id_criterio
+    `;
+
+    const rubrica = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('idActividad', sql.Int, idActividad)
+      .query(rubricaQuery);
+
+    // 5. Calcular información de criterios
+    const criteriosCalificados = rubrica.recordset.length;
+    const totalCriteriosResult = await pool.request()
+      .input('idActividad', sql.Int, idActividad)
+      .query(`
+        SELECT COUNT(*) AS total 
+        FROM tbl_criterios 
+        WHERE id_instrumento = (
+          SELECT id_instrumento FROM tbl_actividades WHERE id_actividad = @idActividad
+        )
+      `);
+    const totalCriterios = totalCriteriosResult.recordset[0]?.total || 0;
+
+    // 6. Preparar respuesta
+    const response = {
+      ...actividad,
+      puntos_obtenidos: calificacionData.calificacionObtenida || 0,
+      calificacion: calificacionData.calificacionFinal || 0,
+      rubrica: rubrica.recordset,
+      criterios_calificados: criteriosCalificados,
+      total_criterios: totalCriterios,
+      fuente_calificacion: 'BD_REAL',
+      valor_actividad: calificacionData.valorActividad || 0
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Error en obtenerActividadEntregadaConCalificacion:', error);
+    res.status(500).json({ 
+      mensaje: 'Error al obtener la actividad entregada',
+      error: error.message,
+      codigo: 'ERROR_SERVIDOR'
+    });
+  }
+};
+
 module.exports = {
   obtenerDatosAlumno,
   cambiarContrasena,
@@ -1221,5 +1554,8 @@ module.exports = {
   obtenerCalificacionesHistoricas, 
   obtenerDetalleActividad,
   obtenerActividadesEntregadas,
-  obtenerActividadEntregada
+  obtenerActividadEntregada,
+  obtenerCalificacionDesdeVista,
+  obtenerDetalleActividadConCalificacion,
+  
 };
