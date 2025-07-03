@@ -89,7 +89,7 @@ const obtenerDetalleActividad = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    console.log(`🔍 === INICIO DEBUG DETALLE ACTIVIDAD (CON ESTADO REAL) ===`);
+    console.log(`🔍 === DETALLE ACTIVIDAD CON ESTADO DINÁMICO ===`);
     console.log(`📋 Parámetros: Matrícula: ${matricula}, ID Actividad: ${idActividad}`);
 
     // PASO 1: Verificar acceso
@@ -178,6 +178,9 @@ const obtenerDetalleActividad = async (req, res) => {
 
     const actividad = result.recordset[0];
 
+    
+
+
     // PASO 3: 🆕 VERIFICAR SI EL INSTRUMENTO TIENE CRITERIOS DEFINIDOS
     const criteriosDefinidos = await pool.request()
       .input('idInstrumento', sql.Int, actividad.id_instrumento)
@@ -203,6 +206,8 @@ const obtenerDetalleActividad = async (req, res) => {
       estadoReal = 'Calificada';
     }
 
+
+    
     // PASO 6: 🆕 MANEJO MEJORADO DE CRITERIOS CON MENSAJES CLAROS
     let rubrica = [];
     let estadoCriterios = {
@@ -239,6 +244,8 @@ const obtenerDetalleActividad = async (req, res) => {
         
       } else {
         console.log(`⚠️ Criterios definidos pero sin calificaciones`);
+
+        
         
         // Obtener criterios sin calificar
         const criteriosSinCalificar = await pool.request()
@@ -279,7 +286,13 @@ const obtenerDetalleActividad = async (req, res) => {
       // No mostrar rúbrica cuando no hay criterios definidos
       rubrica = [];
     }
-
+    // PASO NUEVO: CALCULAR ESTADO DINÁMICO
+    const estadoDinamico = calcularEstadoDinamico(
+      actividad.fecha_entrega_raw || actividad.fecha_entrega,
+      calificacionReal !== null,
+      actividad.estado_original
+    );
+    console.log(`📝 Estado calculado para "${actividad.titulo}": ${actividad.estado_original} → ${estadoDinamico.estado}`);
     // PASO 7: Formatear respuesta
     const response = {
       id_actividad: actividad.id_actividad,
@@ -287,7 +300,7 @@ const obtenerDetalleActividad = async (req, res) => {
       descripcion: actividad.descripcion || 'Sin descripción disponible',
       fecha_asignacion: actividad.fecha_asignacion,
       fecha_entrega: actividad.fecha_entrega,
-      estado: estadoReal,
+      estado:  estadoDinamico.estado,
       instrumento: actividad.instrumento,
       tipoInstrumento: actividad.tipoInstrumento,
       materia: actividad.materia,
@@ -330,7 +343,7 @@ const obtenerDetalleActividad = async (req, res) => {
     res.json(response);
 
   } catch (error) {
-    console.error('❌ Error al obtener detalle de actividad:', error);
+    console.error('❌ Error al obtener detalle con estado dinámico:', error);
     res.status(500).json({ 
       mensaje: 'Error en el servidor al obtener detalle de actividad',
       error: error.message 
@@ -414,7 +427,7 @@ const obtenerActividadEntregada = async (req, res) => {
     if (criteriosCalificados.length > 0) {
       console.log(`✅ Usando criterios calificados reales de la BD`);
       
-      rubrica = criteriosCalificados.map(criterio => ({
+        rubrica = criteriosCalificados.map(criterio => ({
         criterio: criterio.criterio,
         descripcion: criterio.descripcion || 'Criterio de evaluación',
         puntos_maximos: criterio.puntos_maximos,
@@ -663,6 +676,80 @@ const obtenerDatosAlumno = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor al consultar alumno' });
   }
 };
+// NUEVA FUNCIÓN PARA CALCULAR ESTADOS DINÁMICOS
+const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal = 'Pendiente') => {
+  const ahora = new Date();
+  const fechaLimite = new Date(fechaEntrega);
+  const diferenciasHoras = (fechaLimite - ahora) / (1000 * 60 * 60);
+  const diferenciasDias = Math.floor(diferenciasHoras / 24);
+
+  // Si ya está calificado -> CALIFICADA
+  if (tieneCalificacion) {
+    return {
+      estado: 'Calificada',
+      mensaje: 'Esta actividad ya ha sido calificada por el profesor.',
+      color: '#009944',
+      icono: '✅',
+      urgencia: 6
+    };
+  }
+
+  // Si ya venció la fecha y NO está calificado -> VENCIDA
+  if (diferenciasHoras < 0) {
+    const diasVencidos = Math.floor(Math.abs(diferenciasHoras) / 24);
+    return {
+      estado: 'Vencida',
+      mensaje: diasVencidos > 0 
+        ? `Venció hace ${diasVencidos} día${diasVencidos > 1 ? 's' : ''}.`
+        : `Venció hace ${Math.floor(Math.abs(diferenciasHoras))} horas.`,
+      color: '#d9534f',
+      icono: '❌',
+      urgencia: 1
+    };
+  }
+
+  // Si está por vencer (menos de 6 horas) -> MUY URGENTE
+  if (diferenciasHoras <= 6) {
+    return {
+      estado: 'Muy Urgente',
+      mensaje: `¡URGENTE! Vence en ${Math.floor(diferenciasHoras)} horas`,
+      color: '#dc3545',
+      icono: '🚨',
+      urgencia: 2
+    };
+  }
+
+  // Si está por vencer (menos de 24 horas) -> URGENTE
+  if (diferenciasHoras <= 24) {
+    return {
+      estado: 'Urgente',
+      mensaje: `Vence HOY en ${Math.floor(diferenciasHoras)} horas`,
+      color: '#ff6b35',
+      icono: '⚠️',
+      urgencia: 3
+    };
+  }
+
+  // Si está por vencer (menos de 3 días) -> POR VENCER
+  if (diferenciasDias <= 3) {
+    return {
+      estado: 'Por Vencer',
+      mensaje: `Vence en ${diferenciasDias} día${diferenciasDias > 1 ? 's' : ''}`,
+      color: '#f0ad4e',
+      icono: '⏰',
+      urgencia: 4
+    };
+  }
+
+  // Si tiene tiempo suficiente -> PENDIENTE
+  return {
+    estado: 'Pendiente',
+    mensaje: `Vence en ${diferenciasDias} días. Tiempo suficiente`,
+    color: '#007bff',
+    icono: '📝',
+    urgencia: 5
+  };
+};
 
 // Cambiar contraseña del alumno (SIN CAMBIOS)
 const cambiarContrasena = async (req, res) => {
@@ -702,26 +789,22 @@ const cambiarContrasena = async (req, res) => {
   }
 };
 
-// Resto de funciones originales SIN cambios...
+// FUNCIÓN ACTUALIZADA: obtenerActividadesPorAlumno CON ESTADOS DINÁMICOS
+// ===============================================
 const obtenerActividadesPorAlumno = async (req, res) => {
   const { matricula, materia } = req.params;
 
   try {
     const pool = await sql.connect(config);
 
-    console.log('🔍 === INICIO DEBUG ACTIVIDADES ===');
-    console.log(`📋 Parámetros recibidos:`);
-    console.log(`   - Matrícula: ${matricula}`);
-    console.log(`   - Materia: ${materia}`);
+    console.log('🔍 === INICIO ACTIVIDADES CON ESTADOS DINÁMICOS ===');
+    console.log(`📋 Parámetros: Matrícula: ${matricula}, Materia: ${materia}`);
 
-    // PASO 1: Obtener datos completos del alumno
+    // PASO 1: Obtener datos del alumno
     const alumnoResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .query(`
-        SELECT 
-          vchPeriodo,
-          chvGrupo,
-          vchClvCuatri
+        SELECT vchPeriodo, chvGrupo, vchClvCuatri
         FROM tblAlumnos 
         WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
       `);
@@ -731,12 +814,8 @@ const obtenerActividadesPorAlumno = async (req, res) => {
     }
 
     const alumno = alumnoResult.recordset[0];
-    console.log(`👤 Datos del alumno encontrados:`);
-    console.log(`   - Periodo: ${alumno.vchPeriodo}`);
-    console.log(`   - Grupo: ${alumno.chvGrupo}`);
-    console.log(`   - Cuatrimestre: ${alumno.vchClvCuatri}`);
 
-    // PASO 2: CONSULTA PRINCIPAL CON CTE PARA EVITAR DUPLICADOS + ESTADO REAL
+    // PASO 2: CONSULTA CON DETECCIÓN DE CALIFICACIONES Y FECHAS REALES
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('materia', sql.VarChar, materia)
@@ -748,19 +827,12 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           SELECT 
             a.id_actividad,
             a.titulo,
-            a.descripcion,
+            CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
             a.id_modalidad,
             CONVERT(VARCHAR, ag.fecha_asignacion, 126) as fecha_asignacion,
             CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
-            -- 🆕 ESTADO REAL BASADO EN CALIFICACIONES
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_actividad_alumno aa_check
-                INNER JOIN tbl_evaluacion_criterioActividad eca_check ON aa_check.id_actividad_alumno = eca_check.id_actividad_alumno
-                WHERE aa_check.id_actividad = a.id_actividad AND aa_check.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE ea.nombre_estado
-            END as estado,
+            ag.fecha_entrega as fecha_entrega_raw,
+            ea.nombre_estado as estado_original,
             ins.nombre as instrumento,
             ti.nombre_tipo as tipoInstrumento,
             CASE 
@@ -770,6 +842,14 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Individual' as modalidad_tipo,
+            -- 🆕 VERIFICAR CALIFICACIÓN REAL
+            CASE 
+              WHEN EXISTS (
+                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
+                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
+                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
+              ) THEN 1 ELSE 0 
+            END as tiene_calificacion_bd,
             1 as prioridad
           FROM tbl_actividades a
           INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
@@ -789,22 +869,12 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           SELECT 
             a.id_actividad,
             a.titulo,
-            a.descripcion,
+            CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
             a.id_modalidad,
             CONVERT(VARCHAR, ag.fecha_asignacion, 126) as fecha_asignacion,
             CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
-            -- 🆕 ESTADO REAL BASADO EN CALIFICACIONES
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_actividad_equipo ae_check
-                INNER JOIN tbl_equipos e_check ON ae_check.id_equipo = e_check.id_equipo
-                INNER JOIN tbl_equipo_alumno ea_check ON e_check.id_equipo = ea_check.id_equipo
-                INNER JOIN tbl_actividad_alumno aa_check ON a.id_actividad = aa_check.id_actividad AND aa_check.vchMatricula = ea_check.vchMatricula
-                INNER JOIN tbl_evaluacion_criterioActividad eca_check ON aa_check.id_actividad_alumno = eca_check.id_actividad_alumno
-                WHERE ae_check.id_actividad = a.id_actividad AND ea_check.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE ea.nombre_estado
-            END as estado,
+            ag.fecha_entrega as fecha_entrega_raw,
+            ea.nombre_estado as estado_original,
             ins.nombre as instrumento,
             ti.nombre_tipo as tipoInstrumento,
             CASE 
@@ -814,6 +884,13 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Equipo' as modalidad_tipo,
+            CASE 
+              WHEN EXISTS (
+                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
+                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
+                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
+              ) THEN 1 ELSE 0 
+            END as tiene_calificacion_bd,
             2 as prioridad
           FROM tbl_actividades a
           INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
@@ -835,19 +912,12 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           SELECT 
             a.id_actividad,
             a.titulo,
-            a.descripcion,
+            CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
             a.id_modalidad,
             CONVERT(VARCHAR, ag.fecha_asignacion, 126) as fecha_asignacion,
             CONVERT(VARCHAR, ag.fecha_entrega, 126) as fecha_entrega,
-            -- 🆕 ESTADO REAL BASADO EN CALIFICACIONES
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_actividad_alumno aa_check
-                INNER JOIN tbl_evaluacion_criterioActividad eca_check ON aa_check.id_actividad_alumno = eca_check.id_actividad_alumno
-                WHERE aa_check.id_actividad = a.id_actividad AND aa_check.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE ea.nombre_estado
-            END as estado,
+            ag.fecha_entrega as fecha_entrega_raw,
+            ea.nombre_estado as estado_original,
             ins.nombre as instrumento,
             ti.nombre_tipo as tipoInstrumento,
             CASE 
@@ -857,6 +927,13 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Grupo' as modalidad_tipo,
+            CASE 
+              WHEN EXISTS (
+                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
+                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
+                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
+              ) THEN 1 ELSE 0 
+            END as tiene_calificacion_bd,
             3 as prioridad
           FROM tbl_actividades a
           INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
@@ -878,59 +955,96 @@ const obtenerActividadesPorAlumno = async (req, res) => {
             id_modalidad,
             fecha_asignacion,
             fecha_entrega,
-            estado,
+            fecha_entrega_raw,
+            estado_original,
             instrumento,
             tipoInstrumento,
             parcial,
             modalidad_tipo,
+            tiene_calificacion_bd,
             ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
           FROM ActividadesUnicas
         )
-        SELECT 
-          id_actividad,
-          titulo,
-          descripcion,
-          id_modalidad,
-          fecha_asignacion,
-          fecha_entrega,
-          estado,
-          instrumento,
-          tipoInstrumento,
-          parcial,
-          modalidad_tipo
+        SELECT *
         FROM ActividadesSinDuplicados
         WHERE rn = 1
-        ORDER BY fecha_entrega ASC, titulo ASC
+        ORDER BY fecha_entrega_raw ASC
       `);
 
-    console.log(`✅ Actividades encontradas (sin duplicados): ${result.recordset.length}`);
+    console.log(`📊 Actividades obtenidas de BD: ${result.recordset.length}`);
+
+    // PASO 3: CALCULAR ESTADOS DINÁMICOS EN JAVASCRIPT
+    const actividadesConEstadosDinamicos = result.recordset.map(actividad => {
+      // 🆕 CALCULAR ESTADO DINÁMICO BASADO EN FECHA Y CALIFICACIONES REALES
+      const estadoDinamico = calcularEstadoDinamico(
+        actividad.fecha_entrega_raw || actividad.fecha_entrega,
+        actividad.tiene_calificacion_bd === 1,
+        actividad.estado_original
+      );
+
+      console.log(`📝 Actividad "${actividad.titulo}": ${actividad.estado_original} → ${estadoDinamico.estado}`);
+
+      return {
+        id_actividad: actividad.id_actividad,
+        titulo: actividad.titulo,
+        descripcion: actividad.descripcion || 'Sin descripción disponible',
+        id_modalidad: actividad.id_modalidad,
+        fecha_asignacion: actividad.fecha_asignacion,
+        fecha_entrega: actividad.fecha_entrega,
+        
+        // 🆕 ESTADO DINÁMICO PARA COMPATIBILIDAD CON TSX
+        estado: estadoDinamico.estado,
+        estado_info: {
+          mensaje: estadoDinamico.mensaje,
+          color: estadoDinamico.color,
+          icono: estadoDinamico.icono,
+          descripcion: estadoDinamico.descripcion,
+          original: actividad.estado_original,
+          urgencia: estadoDinamico.urgencia
+        },
+        
+        instrumento: actividad.instrumento,
+        tipoInstrumento: actividad.tipoInstrumento,
+        parcial: actividad.parcial,
+        modalidad_tipo: actividad.modalidad_tipo,
+        
+        // Información adicional para el frontend
+        tiene_calificacion: actividad.tiene_calificacion_bd === 1,
+        fuente_estado: 'DINAMICO_JS'
+      };
+    });
+
+    // PASO 4: ORDENAR POR URGENCIA (más urgentes primero)
+    actividadesConEstadosDinamicos.sort((a, b) => {
+      // Primero por urgencia (menor número = más urgente)
+      if (a.estado_info.urgencia !== b.estado_info.urgencia) {
+        return a.estado_info.urgencia - b.estado_info.urgencia;
+      }
+      // Luego por fecha de entrega
+      return new Date(a.fecha_entrega) - new Date(b.fecha_entrega);
+    });
+
+    // PASO 5: LOG DE RESUMEN
+    console.log('📊 Resumen de estados dinámicos:');
+    const resumenEstados = actividadesConEstadosDinamicos.reduce((acc, act) => {
+      acc[act.estado] = (acc[act.estado] || 0) + 1;
+      return acc;
+    }, {});
     
-    if (result.recordset.length > 0) {
-      console.log('📋 Actividades por modalidad:');
-      const modalidades = result.recordset.reduce((acc, r) => {
-        acc[r.modalidad_tipo] = (acc[r.modalidad_tipo] || 0) + 1;
-        return acc;
-      }, {});
-      
-      Object.entries(modalidades).forEach(([modalidad, count]) => {
-        console.log(`   - ${modalidad}: ${count} actividades`);
-      });
+    Object.entries(resumenEstados).forEach(([estado, count]) => {
+      console.log(`   - ${estado}: ${count} actividades`);
+    });
 
-      console.log('📝 Lista de actividades encontradas:');
-      result.recordset.forEach(act => {
-        console.log(`   * ID: ${act.id_actividad} - ${act.titulo} (${act.modalidad_tipo}) - ${act.estado}`);
-      });
-    } else {
-      console.log(`ℹ️ No se encontraron actividades para ${matricula} en ${materia} (periodo: ${alumno.vchPeriodo})`);
-    }
+    console.log('🔍 === FIN ACTIVIDADES CON ESTADOS DINÁMICOS ===');
 
-    console.log('🔍 === FIN DEBUG ACTIVIDADES ===');
+    res.json(actividadesConEstadosDinamicos);
 
-    res.json(result.recordset);
-    
   } catch (error) {
-    console.error('❌ Error al obtener actividades:', error);
-    res.status(500).json({ mensaje: 'Error en el servidor al obtener actividades del alumno' });
+    console.error('❌ Error al obtener actividades con estados dinámicos:', error);
+    res.status(500).json({ 
+      mensaje: 'Error en el servidor al obtener actividades del alumno',
+      error: error.message 
+    });
   }
 };
 
