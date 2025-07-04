@@ -1439,10 +1439,10 @@ const guardarCalificacionesAlumno = async (req, res) => {
   }
 };
 
-// Guardar calificaciones de un equipo
+// 🆕 FUNCIÓN CORREGIDA SIN OUTPUT: guardarCalificacionesEquipo
+// Reemplaza la función anterior con esta versión
 const guardarCalificacionesEquipo = async (req, res) => {
   const { idActividadEquipo, idEquipo, calificaciones } = req.body;
-  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
 
   const transaction = new sql.Transaction();
 
@@ -1450,7 +1450,12 @@ const guardarCalificacionesEquipo = async (req, res) => {
     const pool = await sql.connect(config);
     await transaction.begin();
 
-    // Eliminar calificaciones existentes
+    console.log('🔄 Guardando calificaciones de equipo...');
+    console.log('📋 idActividadEquipo:', idActividadEquipo);
+    console.log('👥 idEquipo:', idEquipo);
+    console.log('📊 Calificaciones:', calificaciones);
+
+    // PASO 1: Eliminar calificaciones existentes del equipo
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .query(`
@@ -1458,7 +1463,38 @@ const guardarCalificacionesEquipo = async (req, res) => {
         WHERE id_actividad_equipo = @idActividadEquipo
       `);
 
-    // Insertar nuevas calificaciones
+    // PASO 2: Obtener todos los integrantes del equipo
+    const integrantesResult = await transaction.request()
+      .input('idEquipo', sql.Int, idEquipo)
+      .query(`
+        SELECT ea.vchMatricula
+        FROM tbl_equipo_alumno ea
+        WHERE ea.id_equipo = @idEquipo
+      `);
+
+    const integrantes = integrantesResult.recordset;
+    console.log(`👥 Integrantes del equipo: ${integrantes.length}`);
+
+    if (integrantes.length === 0) {
+      throw new Error('No se encontraron integrantes en el equipo');
+    }
+
+    // PASO 3: Obtener la actividad para verificar modalidad
+    const actividadResult = await transaction.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT ae.id_actividad
+        FROM tbl_actividad_equipo ae
+        WHERE ae.id_actividad_equipo = @idActividadEquipo
+      `);
+
+    if (actividadResult.recordset.length === 0) {
+      throw new Error('Actividad equipo no encontrada');
+    }
+
+    const idActividad = actividadResult.recordset[0].id_actividad;
+
+    // PASO 4: Insertar nuevas calificaciones en tabla de equipos
     for (const cal of calificaciones) {
       await transaction.request()
         .input('idEquipo', sql.Int, idEquipo)
@@ -1472,16 +1508,93 @@ const guardarCalificacionesEquipo = async (req, res) => {
         `);
     }
 
+    // PASO 5: 🆕 REPLICAR CALIFICACIONES A CADA INTEGRANTE - SIN OUTPUT
+    for (const integrante of integrantes) {
+      console.log(`📝 Replicando calificación para ${integrante.vchMatricula}`);
+
+      // Verificar si existe registro en tbl_actividad_alumno
+      const actividadAlumnoResult = await transaction.request()
+        .input('idActividad', sql.Int, idActividad)
+        .input('matricula', sql.VarChar, integrante.vchMatricula)
+        .query(`
+          SELECT id_actividad_alumno
+          FROM tbl_actividad_alumno
+          WHERE id_actividad = @idActividad AND vchMatricula = @matricula
+        `);
+
+      let idActividadAlumno;
+
+      if (actividadAlumnoResult.recordset.length === 0) {
+        // 🔧 CREAR REGISTRO SIN OUTPUT CLAUSE
+        await transaction.request()
+          .input('idActividad', sql.Int, idActividad)
+          .input('matricula', sql.VarChar, integrante.vchMatricula)
+          .query(`
+            INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula)
+            VALUES (@idActividad, @matricula)
+          `);
+        
+        // 🔧 OBTENER EL ID INSERTADO EN CONSULTA SEPARADA
+        const nuevoIdResult = await transaction.request()
+          .input('idActividad', sql.Int, idActividad)
+          .input('matricula', sql.VarChar, integrante.vchMatricula)
+          .query(`
+            SELECT id_actividad_alumno
+            FROM tbl_actividad_alumno
+            WHERE id_actividad = @idActividad AND vchMatricula = @matricula
+          `);
+        
+        idActividadAlumno = nuevoIdResult.recordset[0].id_actividad_alumno;
+        console.log(`✅ Creado tbl_actividad_alumno para ${integrante.vchMatricula}: ${idActividadAlumno}`);
+      } else {
+        idActividadAlumno = actividadAlumnoResult.recordset[0].id_actividad_alumno;
+        console.log(`✅ Usando tbl_actividad_alumno existente: ${idActividadAlumno}`);
+      }
+
+      // Eliminar calificaciones individuales existentes para este alumno
+      await transaction.request()
+        .input('idActividadAlumno', sql.Int, idActividadAlumno)
+        .query(`
+          DELETE FROM tbl_evaluacion_criterioActividad 
+          WHERE id_actividad_alumno = @idActividadAlumno
+        `);
+
+      // Insertar calificaciones individuales (copia de las del equipo)
+      for (const cal of calificaciones) {
+        await transaction.request()
+          .input('idActividadAlumno', sql.Int, idActividadAlumno)
+          .input('idCriterio', sql.Int, cal.id_criterio)
+          .input('calificacion', sql.Float, cal.calificacion)
+          .query(`
+            INSERT INTO tbl_evaluacion_criterioActividad (
+              id_actividad_alumno, id_criterio, calificacion
+            ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
+          `);
+      }
+    }
+
     await transaction.commit();
-    res.json({ mensaje: 'Calificaciones del equipo guardadas correctamente' });
+    
+    console.log('✅ Calificaciones del equipo guardadas correctamente');
+    console.log(`📊 Calificaciones replicadas a ${integrantes.length} integrantes`);
+    console.log(`🔧 Criterios calificados: ${calificaciones.length}`);
+    
+    res.json({ 
+      mensaje: 'Calificaciones del equipo guardadas correctamente',
+      integrantes_calificados: integrantes.length,
+      criterios_calificados: calificaciones.length,
+      detalle: `Se replicaron las calificaciones a ${integrantes.length} integrantes del equipo`
+    });
 
   } catch (error) {
     await transaction.rollback();
     console.error('❌ Error al guardar calificaciones del equipo:', error);
-    res.status(500).json({ error: 'Error al guardar calificaciones del equipo' });
+    res.status(500).json({ 
+      error: 'Error al guardar calificaciones del equipo',
+      detalle: error.message 
+    });
   }
 };
-
 // ===============================================
 // EXPORTS COMPLETOS
 // ===============================================
