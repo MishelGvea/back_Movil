@@ -1,101 +1,151 @@
 const express = require('express');
 const router = express.Router();
-const { obtenerDatosDocente,
-        obtenerMateriasPorDocente,
-        obtenerGruposPorMateriaDocente,
-        crearActividad,
-        obtenerListasCotejo,
-        obtenerActividadesPorGrupo,
-        obtenerMateriasCompletas,  // ← AGREGAR AQUÍ
-        cambiarContrasenaDocente,
-        obtenerPerfilDocente,
-        // ===============================================
-        // NUEVAS FUNCIONES AGREGADAS DESDE EL PRIMER ARCHIVO
-        // ===============================================
-        obtenerEquiposPorGrupo,
-        obtenerAlumnosPorGrupo,
-        simularEquiposAleatorios,
-        obtenerActividadesConEquiposPorGrupo,
-        crearActividadCompleta,
-        obtenerPeriodoActual,
-        obtenerPeriodosDocente,
-        obtenerMateriasCompletasPorPeriodo,
 
-         // 🆕 Agregar estas nuevas funciones:
-            obtenerDatosActividad,
-            obtenerCriteriosActividad,
-            obtenerAlumnosParaCalificar,
-            obtenerEquiposParaCalificar,
-            obtenerCalificacionesAlumno,
-            obtenerCalificacionesEquipo,
-            guardarCalificacionesAlumno,
-            guardarCalificacionesEquipo   
-      } = require('../controllers/docenteController');
+const {
+  // Datos personales
+  obtenerDatosDocente,
+  obtenerPerfilDocente,
+  cambiarContrasenaDocente,
 
-// ===============================================
-// RUTAS EXISTENTES (SIN MODIFICAR)
-// ===============================================
+  // Materias y periodos
+  obtenerMateriasPorDocente,
+  obtenerMateriasCompletas,
+  obtenerPeriodoActual,
+  obtenerPeriodosDocente,
+  obtenerMateriasCompletasPorPeriodo,
+
+  // 🆕 Componentes CRUD (ponderaciones) - NUEVAS FUNCIONES
+  obtenerComponentesPorMateria,
+  crearComponente,
+  modificarComponente,
+  eliminarComponente,
+  validarSumaComponentes,
+  obtenerComponentesParaDropdown,
+  validarComplecionParcial,
+  obtenerEstadisticasGeneralesDocente,
+  clonarComponentesParcial,
+
+  // Grupos y actividades
+  obtenerGruposPorMateriaDocente,
+  obtenerListasCotejo,
+  obtenerActividadesPorGrupo,
+  crearActividad,
+  crearActividadCompletaConComponente,
+
+  // Equipos
+  obtenerEquiposPorGrupo,
+  obtenerAlumnosPorGrupo,
+  simularEquiposAleatorios,
+  obtenerActividadesConEquiposPorGrupo,
+
+  // Calificaciones
+  obtenerDatosActividad,
+  obtenerCriteriosActividad,
+  obtenerAlumnosParaCalificar,
+  obtenerEquiposParaCalificar,
+  obtenerCalificacionesAlumno,
+  obtenerCalificacionesEquipo,
+  guardarCalificacionesAlumno,
+  guardarCalificacionesEquipo,
+
+  // Observaciones
+  guardarObservacionAlumno,
+  guardarObservacionEquipo,
+  obtenerObservacionAlumno,
+  obtenerObservacionEquipo,
+
+  // Procedimientos almacenados
+  obtenerConcentradoFinal,
+  obtenerCalificacionesActividad
+} = require('../controllers/docenteController');
+
+// =========================================
+// RUTAS GENERALES
+// =========================================
 router.get('/:clave', obtenerDatosDocente);
+router.post('/perfil', obtenerPerfilDocente);
+router.post('/cambiar-contrasena', cambiarContrasenaDocente);
+
+// =========================================
+// MATERIAS Y PERIODOS
+// =========================================
 router.get('/:clave/materias', obtenerMateriasPorDocente);
 router.get('/:clave/materias-completas', obtenerMateriasCompletas);
-router.get('/:clave/materia/:clvMateria/grupos', obtenerGruposPorMateriaDocente);
-router.post('/crear-actividad', crearActividad);
-router.get('/:claveDocente/materia/:claveMateria/listas-cotejo', obtenerListasCotejo);
-router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades', obtenerActividadesPorGrupo);
-// 🆕 Rutas para manejo de periodos
 router.get('/periodo-actual', obtenerPeriodoActual);
 router.get('/:clave/periodos', obtenerPeriodosDocente);
 router.get('/:clave/materias-periodo/:periodo', obtenerMateriasCompletasPorPeriodo);
 
-// Cambiar contraseña del docente
-// POST /api/docente/cambiar-contrasena
-// Body: { usuario: "0098", contrasenaActual: "actual123", nuevaContrasena: "nueva456" }
-router.post('/cambiar-contrasena', cambiarContrasenaDocente);
+// =========================================
+// 🆕 COMPONENTES CRUD - NUEVAS RUTAS
+// =========================================
+// Obtener componentes por materia/parcial/periodo
+router.get('/componentes/:claveDocente/:claveMateria/:parcial/:periodo', obtenerComponentesPorMateria);
 
-// Obtener perfil completo del docente con materias
-// POST /api/docente/perfil
-// Body: { clave: "0098" }
-router.post('/perfil', obtenerPerfilDocente);
+// Crear nuevo componente
+router.post('/componentes/crear', crearComponente);
 
-// ===============================================
-// RUTAS AGREGADAS DESDE EL PRIMER ARCHIVO
-// ===============================================
+// Modificar componente existente
+router.put('/componentes/:idComponente', modificarComponente);
 
-// Rutas para manejo de equipos
+// Eliminar componente
+router.delete('/componentes/:idComponente', eliminarComponente);
+
+// Validar suma total de componentes (función anterior)
+router.get('/componentes/validar/:claveDocente/:claveMateria/:parcial/:periodo', validarSumaComponentes);
+
+// 🆕 Validar completitud de un parcial específico (función nueva mejorada)
+router.get('/componentes/validar-parcial/:claveDocente/:claveMateria/:parcial/:periodo', validarComplecionParcial);
+
+// 🆕 Obtener estadísticas generales del docente
+router.get('/componentes/estadisticas-generales/:claveDocente', obtenerEstadisticasGeneralesDocente);
+
+// 🆕 Clonar componentes de un parcial a otro
+router.post('/componentes/clonar-parcial', clonarComponentesParcial);
+
+// Obtener componentes para dropdown en crear actividad
+router.get('/componentes/dropdown/:claveDocente/:claveMateria/:parcial/:periodo', obtenerComponentesParaDropdown);
+
+// =========================================
+// GRUPOS Y ACTIVIDADES
+// =========================================
+router.get('/:clave/materia/:clvMateria/grupos', obtenerGruposPorMateriaDocente);
+router.get('/:claveDocente/materia/:claveMateria/listas-cotejo', obtenerListasCotejo);
+router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades', obtenerActividadesPorGrupo);
+router.post('/crear-actividad', crearActividad);
+router.post('/crear-actividad-completa-componente', crearActividadCompletaConComponente);
+
+// =========================================
+// EQUIPOS
+// =========================================
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/equipos', obtenerEquiposPorGrupo);
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/alumnos', obtenerAlumnosPorGrupo);
 router.post('/simular-equipos-aleatorios', simularEquiposAleatorios);
-
-// Crear actividad completa (con equipos si es necesario)
-router.post('/crear-actividad-completa', crearActividadCompleta);
-
-// Actividades con equipos por grupo
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades-equipos', obtenerActividadesConEquiposPorGrupo);
 
-// Obtener datos de actividad para calificar
+// =========================================
+// CALIFICACIONES
+// =========================================
 router.get('/actividad/:idActividad/datos', obtenerDatosActividad);
-
-// Obtener criterios de evaluación
 router.get('/actividad/:idActividad/criterios', obtenerCriteriosActividad);
-
-// Obtener alumnos para calificar (modalidad individual)
 router.get('/actividad/:idActividad/alumnos', obtenerAlumnosParaCalificar);
-
-// Obtener equipos para calificar (modalidad equipo)
 router.get('/actividad/:idActividad/equipos', obtenerEquiposParaCalificar);
-
-// Obtener calificaciones existentes de un alumno
 router.get('/actividad-alumno/:idActividadAlumno/calificaciones', obtenerCalificacionesAlumno);
-
-// Obtener calificaciones existentes de un equipo
 router.get('/actividad-equipo/:idActividadEquipo/calificaciones', obtenerCalificacionesEquipo);
-
-// Guardar calificaciones de un alumno
 router.post('/calificar-alumno', guardarCalificacionesAlumno);
-
-// Guardar calificaciones de un equipo
 router.post('/calificar-equipo', guardarCalificacionesEquipo);
 
+// =========================================
+// OBSERVACIONES
+// =========================================
+router.post('/observacion-alumno', guardarObservacionAlumno);
+router.post('/observacion-equipo', guardarObservacionEquipo);
+router.get('/actividad-alumno/:idActividadAlumno/observacion', obtenerObservacionAlumno);
+router.get('/actividad-equipo/:idActividadEquipo/observacion', obtenerObservacionEquipo);
 
+// =========================================
+// PROCEDIMIENTOS ALMACENADOS
+// =========================================
+router.get('/concentrado/:parcial/:grupo/:periodo/:cuatrimestre/:materia', obtenerConcentradoFinal);
+router.get('/calificaciones-actividad/:parcial/:grupo/:periodo/:cuatrimestre/:materia', obtenerCalificacionesActividad);
 
 module.exports = router;

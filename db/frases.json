@@ -1,0 +1,824 @@
+{
+  "frases": [
+    {
+      "texto": "La educación es el arma más poderosa para cambiar el mundo",
+      "autor": "Nelson Mandela"
+    },
+    {
+      "texto": "Enseñar es aprender dos veces",
+      "autor": "Joseph Joubert"
+    },
+    {
+      "texto": "El buen maestro hace que el mal estudiante se convierta en bueno",
+      "autor": "Marva Collins"
+    },
+    {
+      "texto": "La educación no es preparación para la vida; es la vida misma",
+      "autor": "John Dewey"
+    },
+    {
+      "texto": "Un maestro afecta la eternidad; nunca puede decir dónde termina su influencia",
+      "autor": "Henry Adams"
+    },
+    {
+      "texto": "Educar la mente sin educar el corazón no es educación en absoluto",
+      "autor": "Aristóteles"
+    },
+    {
+      "texto": "El arte supremo del maestro consiste en despertar el goce",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "Dime y lo olvido, enséñame y lo recuerdo, involúcrame y lo aprendo",
+      "autor": "Benjamin Franklin"
+    },
+    {
+      "texto": "La mejor enseñanza es la que utiliza la menor cantidad de palabras",
+      "autor": "Maria Montessori"
+    },
+    {
+      "texto": "Cada estudiante puede aprender, solo no el mismo día o de la misma manera",
+      "autor": "George Evans"
+    },
+    {
+      "texto": "La educación es la llave maestra que abre todas las puertas del futuro",
+      "autor": "George Washington Carver"
+    },
+    {
+      "texto": "Un profesor mediocre cuenta, un buen profesor explica, un gran profesor demuestra",
+      "autor": "William Arthur Ward"
+    },
+    {
+      "texto": "Los buenos maestros son costosos, pero los malos maestros cuestan más",
+      "autor": "Bob Talbert"
+    },
+    {
+      "texto": "La enseñanza que deja huella no es la que se hace de cabeza a cabeza, sino de corazón a corazón",
+      "autor": "Howard G. Hendricks"
+    },
+    {
+      "texto": "Educar no es llenar un recipiente, sino encender una hoguera",
+      "autor": "William Butler Yeats"
+    },
+    {
+      "texto": "La educación es el pasaporte hacia el futuro, el mañana pertenece a quienes se preparan hoy",
+      "autor": "Malcolm X"
+    },
+    {
+      "texto": "Un niño, un maestro, un libro y un lápiz pueden cambiar el mundo",
+      "autor": "Malala Yousafzai"
+    },
+    {
+      "texto": "La excelencia en la educación es asegurar que cada niño logre el máximo de su potencial",
+      "autor": "Carol Ann Tomlinson"
+    },
+    {
+      "texto": "El objetivo de la educación es la virtud y el deseo de convertirse en un buen ciudadano",
+      "autor": "Platón"
+    },
+    {
+      "texto": "El propósito de la educación es reemplazar una mente vacía con una abierta",
+      "autor": "Malcolm Forbes"
+    },
+    {
+      "texto": "La educación es el movimiento de la oscuridad a la luz",
+      "autor": "Allan Bloom"
+    },
+    {
+      "texto": "Invertir en conocimiento produce los mejores réditos",
+      "autor": "Benjamin Franklin"
+    },
+    {
+      "texto": "El aprendizaje nunca agota la mente",
+      "autor": "Leonardo da Vinci"
+    },
+    {
+      "texto": "La educación es el fundamento sobre el cual construimos nuestro futuro",
+      "autor": "Christine Gregoire"
+    },
+    {
+      "texto": "El conocimiento es poder, pero el entusiasmo tira del interruptor",
+      "autor": "Ivern Ball"
+    },
+    {
+      "texto": "Enseñar es tocar una vida para siempre",
+      "autor": "Christa McAuliffe"
+    },
+    {
+      "texto": "La educación es la capacidad de escuchar casi cualquier cosa sin perder los estribos",
+      "autor": "Robert Frost"
+    },
+    {
+      "texto": "El único fracaso real en la vida es no actuar cuando sabes qué es lo correcto",
+      "autor": "Buckminster Fuller"
+    },
+    {
+      "texto": "La curiosidad es el motor del logro",
+      "autor": "Ken Robinson"
+    },
+    {
+      "texto": "El profesor mediocre dice. El buen profesor explica. El profesor superior demuestra. El gran profesor inspira",
+      "autor": "William Arthur Ward"
+    },
+    {
+      "texto": "La educación es lo que sobrevive cuando lo que se ha aprendido se olvida",
+      "autor": "B.F. Skinner"
+    },
+    {
+      "texto": "Todos los grandes logros requieren tiempo",
+      "autor": "Maya Angelou"
+    },
+    {
+      "texto": "La mente que se abre a una nueva idea jamás volverá a su tamaño original",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "No enseñes a pescar a tus estudiantes, enséñales a tener hambre de pescado",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el gran ecualizador de las condiciones del hombre",
+      "autor": "Horace Mann"
+    },
+    {
+      "texto": "Lo que esculpe rocas son gotas de agua, no martillazos",
+      "autor": "Gustavo Cerati"
+    },
+    {
+      "texto": "El fracaso es una gran oportunidad para empezar otra vez con más inteligencia",
+      "autor": "Henry Ford"
+    },
+    {
+      "texto": "La creatividad es la inteligencia divirtiéndose",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "No hay nada noble en ser superior a tu prójimo; la verdadera nobleza es ser superior a quien eras antes",
+      "autor": "Ernest Hemingway"
+    },
+    {
+      "texto": "La práctica no hace al maestro. La práctica perfecta hace al maestro",
+      "autor": "Vince Lombardi"
+    },
+    {
+      "texto": "El conocimiento habla, pero la sabiduría escucha",
+      "autor": "Jimi Hendrix"
+    },
+    {
+      "texto": "La disciplina es el puente entre metas y logros",
+      "autor": "Jim Rohn"
+    },
+    {
+      "texto": "No puedes enseñar a un hombre nada, solo puedes ayudarle a encontrarlo dentro de sí mismo",
+      "autor": "Galileo Galilei"
+    },
+    {
+      "texto": "El éxito es la suma de pequeños esfuerzos repetidos día tras día",
+      "autor": "Robert Collier"
+    },
+    {
+      "texto": "La paciencia es la compañera de la sabiduría",
+      "autor": "San Agustín"
+    },
+    {
+      "texto": "El que pregunta es un tonto por cinco minutos; el que no pregunta permanece tonto para siempre",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La motivación es lo que te pone en marcha, el hábito es lo que hace que sigas",
+      "autor": "Jim Ryun"
+    },
+    {
+      "texto": "El maestro que intenta enseñar sin inspirar al alumno a aprender está martillando hierro frío",
+      "autor": "Horace Mann"
+    },
+    {
+      "texto": "La verdadera educación consiste en obtener lo mejor de uno mismo",
+      "autor": "Mahatma Gandhi"
+    },
+    {
+      "texto": "El cambio es el resultado final de todo verdadero aprendizaje",
+      "autor": "John F. Kennedy"
+    },
+    {
+      "texto": "La innovación distingue entre un líder y un seguidor",
+      "autor": "Steve Jobs"
+    },
+    {
+      "texto": "Los niños necesitan modelos más que críticos",
+      "autor": "Joseph Joubert"
+    },
+    {
+      "texto": "La educación es el encendido de una llama, no el llenado de un recipiente",
+      "autor": "William Butler Yeats"
+    },
+    {
+      "texto": "El que no arriesga no gana",
+      "autor": "Refrán Popular"
+    },
+    {
+      "texto": "La excelencia no es una habilidad, es una actitud",
+      "autor": "Ralph Marston"
+    },
+    {
+      "texto": "El futuro pertenece a quienes creen en la belleza de sus sueños",
+      "autor": "Eleanor Roosevelt"
+    },
+    {
+      "texto": "Lo que hacemos hoy determina cómo será nuestro mañana",
+      "autor": "Benjamin Franklin"
+    },
+    {
+      "texto": "La perseverancia es la llave del éxito",
+      "autor": "Charlie Chaplin"
+    },
+    {
+      "texto": "El maestro deja una huella para la eternidad; nunca sabrá dónde termina su influencia",
+      "autor": "Henry Brooks Adams"
+    },
+    {
+      "texto": "El aprendizaje es un tesoro que seguirá a su propietario a todas partes",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La única educación verdadera es aquella que enseña a los estudiantes a pensar por sí mismos",
+      "autor": "José Martí"
+    },
+    {
+      "texto": "La imaginación es más importante que el conocimiento",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "Enseñar es aprender de nuevo",
+      "autor": "Novalis"
+    },
+    {
+      "texto": "La educación es el arma más poderosa que puedes usar para cambiar el mundo",
+      "autor": "Nelson Mandela"
+    },
+    {
+      "texto": "El talento sin educación es como la plata en la mina",
+      "autor": "Benjamin Franklin"
+    },
+    {
+      "texto": "La enseñanza debe despertar la alegría del trabajo y el conocimiento creativo",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "Un buen maestro puede inspirar esperanza, encender la imaginación e infundir amor por el aprendizaje",
+      "autor": "Brad Henry"
+    },
+    {
+      "texto": "La educación no es llenar un cubo, sino encender un fuego",
+      "autor": "William Butler Yeats"
+    },
+    {
+      "texto": "Los maestros abren puertas, pero tú debes entrar por tu propia cuenta",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La diferencia entre la escuela y la vida: en la escuela te enseñan una lección y luego te dan un examen; en la vida te dan un examen que te enseña una lección",
+      "autor": "Tom Bodett"
+    },
+    {
+      "texto": "El secreto de enseñar no es tanto transmitir conocimiento como contagiar curiosidad",
+      "autor": "Michel de Montaigne"
+    },
+    {
+      "texto": "La educación es el desarrollo de la fuerza que está dentro de nosotros",
+      "autor": "Swami Vivekananda"
+    },
+    {
+      "texto": "Cada niño es un artista. El problema es cómo mantener al artista cuando crezca",
+      "autor": "Pablo Picasso"
+    },
+    {
+      "texto": "El aprendizaje sin pensamiento es inútil; el pensamiento sin aprendizaje es peligroso",
+      "autor": "Confucio"
+    },
+    {
+      "texto": "Los estudiantes no se interesan en lo que sabe hasta que sepan que te interesas por ellos",
+      "autor": "John C. Maxwell"
+    },
+    {
+      "texto": "La educación es la herramienta más poderosa para cambiar el mundo",
+      "autor": "Nelson Mandela"
+    },
+    {
+      "texto": "Un profesor es una brújula que activa los imanes de la curiosidad, el conocimiento y la sabiduría",
+      "autor": "Ever Garrison"
+    },
+    {
+      "texto": "La educación formal te dará una vida; la autoeducación te dará una fortuna",
+      "autor": "Jim Rohn"
+    },
+    {
+      "texto": "El objetivo de la educación es preparar a los jóvenes para educarse a sí mismos",
+      "autor": "Robert Maynard Hutchins"
+    },
+    {
+      "texto": "La curiosidad es el punto de partida del logro",
+      "autor": "Ken Robinson"
+    },
+    {
+      "texto": "No todos los estudiantes son iguales; simplemente están preparados de manera diferente",
+      "autor": "George Evans"
+    },
+    {
+      "texto": "La educación es simplemente el alma de una sociedad pasando de una generación a otra",
+      "autor": "Gilbert K. Chesterton"
+    },
+    {
+      "texto": "Un maestro inspirador puede cambiar el rumbo de la historia humana",
+      "autor": "Brad Henry"
+    },
+    {
+      "texto": "La enseñanza es más que impartir conocimiento; es inspirar el cambio",
+      "autor": "William Arthur Ward"
+    },
+    {
+      "texto": "El mejor momento para plantar un árbol fue hace 20 años. El segundo mejor momento es ahora",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La inteligencia consiste no solo en el conocimiento, sino también en la destreza de aplicar los conocimientos en la práctica",
+      "autor": "Aristóteles"
+    },
+    {
+      "texto": "Un día de escuela puede cambiar toda una vida",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la clave del éxito en la vida, y los maestros tienen un impacto duradero en las vidas de sus estudiantes",
+      "autor": "Solomon Ortiz"
+    },
+    {
+      "texto": "Lo que enseñas a otros, te lo enseñas a ti mismo",
+      "autor": "Proverbio"
+    },
+    {
+      "texto": "La sabiduría no es producto de la escolarización, sino de la adquisición de conocimientos a lo largo de la vida",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "Educar es formar personas aptas para gobernarse a sí mismas",
+      "autor": "Herbert Spencer"
+    },
+    {
+      "texto": "Los grandes maestros tienen altas expectativas de sus estudiantes, pero expectativas aún más altas de sí mismos",
+      "autor": "Todd Whitaker"
+    },
+    {
+      "texto": "La educación no es una preparación para la vida; la educación es la vida en sí misma",
+      "autor": "John Dewey"
+    },
+    {
+      "texto": "El maestro que es verdaderamente sabio no te invita a entrar en la casa de su sabiduría, sino que te lleva al umbral de tu propia mente",
+      "autor": "Khalil Gibran"
+    },
+    {
+      "texto": "La educación es el proceso mediante el cual el individuo desarrolla aquellas capacidades, actitudes y otras formas de conducta",
+      "autor": "Kingsley Davis"
+    },
+    {
+      "texto": "Si das un pescado a un hombre, comerá un día. Si le enseñas a pescar, comerá toda la vida",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La educación es lo que permanece después de que uno ha olvidado lo que aprendió en la escuela",
+      "autor": "Albert Einstein"
+    },
+    {
+      "texto": "El buen profesor hace que el mal estudiante se convierta en bueno y el buen estudiante en superior",
+      "autor": "Marva Collins"
+    },
+    {
+      "texto": "Los maestros ideales son aquellos que se hacen puentes hacia el conocimiento",
+      "autor": "Nikos Kazantzakis"
+    },
+    {
+      "texto": "La educación es el mejor legado que podemos dejar a las generaciones futuras",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro afecta la eternidad; no puede decir dónde termina su influencia",
+      "autor": "Henry Brooks Adams"
+    },
+    {
+      "texto": "La educación es la vacuna contra la violencia",
+      "autor": "Edward James Olmos"
+    },
+    {
+      "texto": "El primer paso hacia el conocimiento es saber que somos ignorantes",
+      "autor": "Richard Cecil"
+    },
+    {
+      "texto": "La educación es el vestido de gala para asistir a la fiesta de la vida",
+      "autor": "Miguel Rojas Sánchez"
+    },
+    {
+      "texto": "Los maestros son los profesionales que crean a todos los demás profesionales",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es un acto de optimismo",
+      "autor": "Colleen Wilcox"
+    },
+    {
+      "texto": "La educación comienza con el ejemplo",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "El conocimiento sin transformación no es sabiduría",
+      "autor": "Paulo Freire"
+    },
+    {
+      "texto": "Un maestro toma la mano, abre la mente y toca el corazón",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La verdadera enseñanza es despertar lo que ya está ahí en el alma del estudiante",
+      "autor": "Platón"
+    },
+    {
+      "texto": "La educación es la llave que abre la puerta dorada de la libertad",
+      "autor": "George Washington Carver"
+    },
+    {
+      "texto": "Un buen maestro es como una vela que se consume para dar luz a otros",
+      "autor": "Mustafa Kemal Atatürk"
+    },
+    {
+      "texto": "La calidad, no la longevidad, es lo que importa más en la educación",
+      "autor": "Martin Luther King Jr."
+    },
+    {
+      "texto": "El conocimiento es orgulloso de haber aprendido tanto; la sabiduría es humilde de no saber más",
+      "autor": "William Cowper"
+    },
+    {
+      "texto": "La educación es el desarrollo en el hombre de toda la perfección de que su naturaleza es capaz",
+      "autor": "Immanuel Kant"
+    },
+    {
+      "texto": "Los maestros pueden abrir puertas, pero debes entrar por ti mismo",
+      "autor": "Proverbio Chino"
+    },
+    {
+      "texto": "La educación es el poder de pensar claramente, el poder de actuar bien en el trabajo del mundo",
+      "autor": "David Starr Jordan"
+    },
+    {
+      "texto": "Un estudiante no es un contenedor que llenar, sino una tea que encender",
+      "autor": "Plutarco"
+    },
+    {
+      "texto": "La educación no es solo académica. Es enseñar cómo pensar, no qué pensar",
+      "autor": "J. Krishnamurti"
+    },
+    {
+      "texto": "El maestro excepcional es aquel que enseña desde el corazón, no desde el libro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el pasaporte al futuro; el mañana pertenece a aquellos que se preparan para él hoy",
+      "autor": "Malcolm X"
+    },
+    {
+      "texto": "Los mejores maestros enseñan desde el corazón, no desde el libro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la transmisión de la civilización",
+      "autor": "Ariel Durant"
+    },
+    {
+      "texto": "Un maestro plantará una semilla de curiosidad que crecerá para siempre",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es lo único que nadie te puede quitar",
+      "autor": "B.B. King"
+    },
+    {
+      "texto": "El propósito de la educación es reemplazar una mente vacía con una mente abierta",
+      "autor": "Malcolm Forbes"
+    },
+    {
+      "texto": "La educación es la base sobre la cual construimos nuestro futuro",
+      "autor": "Christine Gregoire"
+    },
+    {
+      "texto": "Los maestros son arquitectos del futuro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el motor del crecimiento personal",
+      "autor": "Nelson Mandela"
+    },
+    {
+      "texto": "Enseñar es el acto de fe más grande de la humanidad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la inversión más rentable",
+      "autor": "Benjamin Franklin"
+    },
+    {
+      "texto": "Un día sin aprender es un día perdido",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros cambian vidas con una sola lección",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el único negocio aún dispuesto a pagar por productos defectuosos",
+      "autor": "Marie Osmond"
+    },
+    {
+      "texto": "El aprendizaje nunca termina",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el gran nivelador",
+      "autor": "Horace Mann"
+    },
+    {
+      "texto": "Los maestros inspiran, educan y despiertan el amor por el aprendizaje",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La curiosidad es el punto de partida de todos los grandes descubrimientos",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es libertad",
+      "autor": "Paulo Freire"
+    },
+    {
+      "texto": "Un maestro inspirador vale más que mil libros",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la llave maestra",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es plantar una semilla de posibilidad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación comienza en la cuna y termina en la tumba",
+      "autor": "José Martí"
+    },
+    {
+      "texto": "Los buenos maestros son costosos, pero los malos maestros son aún más costosos",
+      "autor": "Bob Talbert"
+    },
+    {
+      "texto": "La educación es el antídoto de la ignorancia",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro ve el potencial donde otros ven problemas",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la herencia más valiosa",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es iluminar mentes",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación trasciende generaciones",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro dedicado nunca se jubila verdaderamente",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el cimiento de la sociedad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros plantan semillas de conocimiento que florecen para siempre",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es poder en acción",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es dar vida a las ideas",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la escalera al éxito",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro cambia el mundo un estudiante a la vez",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la única riqueza que nadie puede robar",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es crear el futuro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la mejor póliza de seguro para el futuro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son los héroes silenciosos de la sociedad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la luz en la oscuridad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es sembrar esperanza",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la medicina del alma",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un buen maestro es como un faro que guía a los barcos perdidos",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el regalo que sigue dando",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es tocar el futuro",
+      "autor": "Christa McAuliffe"
+    },
+    {
+      "texto": "La educación es la inversión que nunca pierde valor",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son jardineros de mentes",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el puente entre el presente y el futuro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es un acto de amor incondicional",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la brújula de la vida",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro excepcional deja huellas en el corazón",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el tesoro más preciado",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es despertar gigantes dormidos",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el fundamento de la democracia",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son escultores de caracteres",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la ventana al mundo",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es encender la llama del saber",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el combustible del progreso",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro inspirador es un tesoro invaluable",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la llave de todas las puertas",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es construir puentes hacia el mañana",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la semilla de la grandeza",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son alquimistas que transforman curiosidad en sabiduría",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el mapa del tesoro de la vida",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es plantar bosques de conocimiento",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la herramienta más poderosa del cambio",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro dedicado es un faro de esperanza",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el oxígeno del alma",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es escribir en el corazón de la humanidad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la escalera que todos pueden subir",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son arquitectos de sueños",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la vacuna contra la ignorancia",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es regar jardines de posibilidades",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el eco que resuena en la eternidad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro excepcional multiplica talentos",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la música que armoniza la sociedad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es pintar arcoíris en mentes grises",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el timón que dirige el futuro",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Los maestros son magos que convierten ignorancia en sabiduría",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el motor de la transformación social",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Enseñar es despertar la curiosidad dormida",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es la biblioteca viviente de la humanidad",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "Un maestro apasionado enciende mil antorchas",
+      "autor": "Anónimo"
+    },
+    {
+      "texto": "La educación es el telescopio hacia el infinito",
+      "autor": "Anónimo"
+    }
+]
+}
