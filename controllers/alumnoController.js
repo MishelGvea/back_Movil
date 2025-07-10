@@ -355,7 +355,7 @@ const obtenerDetalleActividad = async (req, res) => {
 // RESTO DE FUNCIONES SIN CAMBIOS
 // ===============================================
 
-// Función ORIGINAL obtenerActividadEntregada (sin cambios)
+// FUNCIÓN ACTUALIZADA: obtenerActividadEntregada
 const obtenerActividadEntregada = async (req, res) => {
   const { matricula, idActividad } = req.params;
 
@@ -376,14 +376,15 @@ const obtenerActividadEntregada = async (req, res) => {
       });
     }
 
-    // PASO 2: Obtener detalles de la actividad
+    // PASO 2: Obtener detalles de la actividad CON OBSERVACIONES
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
+      .input('matricula', sql.VarChar, matricula) // Agregar parámetro matricula
       .query(`
         SELECT 
           AC.id_actividad,
           AC.titulo,
-          AC.descripcion,
+          CAST(AC.descripcion AS NVARCHAR(MAX)) as descripcion,
           CONVERT(VARCHAR, AG.fecha_asignacion, 126) as fecha_asignacion,
           CONVERT(VARCHAR, AG.fecha_entrega, 126) as fecha_entrega,
           I.nombre as instrumento,
@@ -404,13 +405,18 @@ const obtenerActividadEntregada = async (req, res) => {
             WHEN AC.id_modalidad = 2 THEN 'Equipo'
             WHEN AC.id_modalidad = 3 THEN 'Grupo'
             ELSE 'Desconocida'
-          END as modalidad_nombre
+          END as modalidad_nombre,
+          -- 🆕 AGREGAR OBSERVACIONES DE LA BASE DE DATOS
+          AA.observacion as observaciones_bd
         FROM tbl_actividades AC
         INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
         INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria
         INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
         INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
         INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
+        -- 🆕 JOIN CON tbl_actividad_alumno PARA OBTENER OBSERVACIONES
+        LEFT JOIN tbl_actividad_alumno AA ON AA.id_actividad = AC.id_actividad 
+                                          AND AA.vchMatricula = @matricula
         WHERE AC.id_actividad = @idActividad
       `);
 
@@ -420,14 +426,14 @@ const obtenerActividadEntregada = async (req, res) => {
 
     const actividad = result.recordset[0];
 
-    // PASO 3: 🆕 OBTENER CRITERIOS CALIFICADOS REALES
+    // PASO 3: Obtener criterios calificados reales
     const criteriosCalificados = await obtenerCriteriosCalificadosReales(pool, idActividad, matricula);
     
     let rubrica = [];
     if (criteriosCalificados.length > 0) {
       console.log(`✅ Usando criterios calificados reales de la BD`);
       
-        rubrica = criteriosCalificados.map(criterio => ({
+      rubrica = criteriosCalificados.map(criterio => ({
         criterio: criterio.criterio,
         descripcion: criterio.descripcion || 'Criterio de evaluación',
         puntos_maximos: criterio.puntos_maximos,
@@ -456,13 +462,13 @@ const obtenerActividadEntregada = async (req, res) => {
       ];
     }
 
-    // PASO 4: Verificar entrega puntual (simulado por ahora)
+    // PASO 4: Verificar entrega puntual
     const fechaEntregaLimite = new Date(actividad.fecha_entrega);
-    const fechaEntregaAlumno = new Date(); // Por ahora simulada
-    fechaEntregaAlumno.setDate(fechaEntregaLimite.getDate() - 1); // Simular entrega 1 día antes
+    const fechaEntregaAlumno = new Date(); 
+    fechaEntregaAlumno.setDate(fechaEntregaLimite.getDate() - 1); 
     const entregaPuntual = fechaEntregaAlumno <= fechaEntregaLimite;
 
-    // PASO 5: Formatear respuesta con datos REALES
+    // PASO 5: Formatear respuesta con observaciones REALES
     const response = {
       id_actividad: actividad.id_actividad,
       titulo: actividad.titulo,
@@ -470,31 +476,30 @@ const obtenerActividadEntregada = async (req, res) => {
       fecha_asignacion: actividad.fecha_asignacion,
       fecha_entrega: actividad.fecha_entrega,
       fecha_entrega_alumno: fechaEntregaAlumno.toISOString(),
-      estado: 'Calificada', // Estado real
+      estado: 'Calificada',
       instrumento: actividad.instrumento,
       tipoInstrumento: actividad.tipoInstrumento,
       materia: actividad.materia,
       docente: actividad.docente,
       parcial: actividad.parcial,
       puntos_total: actividad.puntos_total,
-      puntos_obtenidos: calificacionReal.puntos_obtenidos_total, // 🆕 REAL
-      calificacion: calificacionReal.calificacion_sobre_10, // 🆕 REAL
-      observaciones: 'Actividad calificada correctamente', // Por ahora genérico
-      retroalimentacion: 'Buen trabajo. Continúa esforzándote.', // Por ahora genérico
+      puntos_obtenidos: calificacionReal.puntos_obtenidos_total,
+      calificacion: calificacionReal.calificacion_sobre_10,
+      // 🆕 USAR OBSERVACIONES REALES DE LA BASE DE DATOS
+      observaciones: actividad.observaciones_bd || 'Sin observaciones registradas',
+      retroalimentacion: actividad.observaciones_bd || 'Sin retroalimentación específica',
       id_modalidad: actividad.id_modalidad,
       modalidad_nombre: actividad.modalidad_nombre,
-      rubrica: rubrica, // 🆕 REAL
+      rubrica: rubrica,
       entrega_puntual: entregaPuntual,
-      // Información adicional
       criterios_calificados: calificacionReal.criterios_calificados,
       fuente_calificacion: 'BD_REAL'
     };
 
-    console.log(`✅ Actividad entregada con calificación REAL:`);
+    console.log(`✅ Actividad entregada con observaciones REALES:`);
+    console.log(`   - Observaciones: ${response.observaciones}`);
     console.log(`   - Calificación: ${response.calificacion}/10`);
     console.log(`   - Puntos: ${response.puntos_obtenidos}/${response.puntos_total}`);
-    console.log(`   - Criterios calificados: ${response.criterios_calificados}`);
-    console.log(`   - Fuente: BD REAL`);
     console.log(`🎯 === FIN DEBUG ACTIVIDAD ENTREGADA ===`);
 
     res.json(response);
@@ -791,13 +796,14 @@ const cambiarContrasena = async (req, res) => {
 
 // FUNCIÓN ACTUALIZADA: obtenerActividadesPorAlumno CON ESTADOS DINÁMICOS
 // ===============================================
+// FUNCIÓN ACTUALIZADA: obtenerActividadesPorAlumno CON CLASIFICACIÓN DE COMPONENTES
 const obtenerActividadesPorAlumno = async (req, res) => {
   const { matricula, materia } = req.params;
 
   try {
     const pool = await sql.connect(config);
 
-    console.log('🔍 === INICIO ACTIVIDADES CON ESTADOS DINÁMICOS ===');
+    console.log('🔍 === INICIO ACTIVIDADES CON ESTADOS DINÁMICOS Y COMPONENTES ===');
     console.log(`📋 Parámetros: Matrícula: ${matricula}, Materia: ${materia}`);
 
     // PASO 1: Obtener datos del alumno
@@ -815,7 +821,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
 
     const alumno = alumnoResult.recordset[0];
 
-    // PASO 2: CONSULTA CON DETECCIÓN DE CALIFICACIONES Y FECHAS REALES
+    // PASO 2: CONSULTA MODIFICADA INCLUYENDO INFORMACIÓN DE COMPONENTES
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('materia', sql.VarChar, materia)
@@ -842,7 +848,16 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Individual' as modalidad_tipo,
-            -- 🆕 VERIFICAR CALIFICACIÓN REAL
+            -- 🆕 INFORMACIÓN DE COMPONENTE Y CLASIFICACIÓN
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            ISNULL(vce.valor_componente, 0) as valor_componente,
+            CASE 
+              WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
+              ELSE 'Normal'
+            END as clasificacion_actividad,
+            -- Verificar calificación real
             CASE 
               WHEN EXISTS (
                 SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
@@ -858,6 +873,8 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           INNER JOIN tbl_tipo_instrumento ti ON ti.id_tipo_instrumento = ins.id_tipo_instrumento
           INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
           INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
+          -- 🆕 JOIN CON TABLA DE COMPONENTES
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
           WHERE aa.vchMatricula = @matricula 
           AND m.vchNomMateria = @materia
           AND ins.vchPeriodo = @periodo_alumno
@@ -884,6 +901,15 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Equipo' as modalidad_tipo,
+            -- 🆕 INFORMACIÓN DE COMPONENTE Y CLASIFICACIÓN
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            ISNULL(vce.valor_componente, 0) as valor_componente,
+            CASE 
+              WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
+              ELSE 'Normal'
+            END as clasificacion_actividad,
             CASE 
               WHEN EXISTS (
                 SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
@@ -901,6 +927,8 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
           INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
           INNER JOIN tbl_equipo_alumno ea_alumno ON e.id_equipo = ea_alumno.id_equipo
+          -- 🆕 JOIN CON TABLA DE COMPONENTES
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
           WHERE ea_alumno.vchMatricula = @matricula 
           AND m.vchNomMateria = @materia
           AND ins.vchPeriodo = @periodo_alumno
@@ -927,6 +955,15 @@ const obtenerActividadesPorAlumno = async (req, res) => {
               ELSE 'Actividad General'
             END as parcial,
             'Grupo' as modalidad_tipo,
+            -- 🆕 INFORMACIÓN DE COMPONENTE Y CLASIFICACIÓN
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            ISNULL(vce.valor_componente, 0) as valor_componente,
+            CASE 
+              WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
+                   UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
+              ELSE 'Normal'
+            END as clasificacion_actividad,
             CASE 
               WHEN EXISTS (
                 SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
@@ -942,6 +979,8 @@ const obtenerActividadesPorAlumno = async (req, res) => {
           INNER JOIN tbl_tipo_instrumento ti ON ti.id_tipo_instrumento = ins.id_tipo_instrumento
           INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
           INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+          -- 🆕 JOIN CON TABLA DE COMPONENTES
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
           WHERE g.vchGrupo = @grupo_alumno 
           AND m.vchNomMateria = @materia
           AND ins.vchPeriodo = @periodo_alumno
@@ -961,6 +1000,9 @@ const obtenerActividadesPorAlumno = async (req, res) => {
             tipoInstrumento,
             parcial,
             modalidad_tipo,
+            tipo_componente,
+            valor_componente,
+            clasificacion_actividad,
             tiene_calificacion_bd,
             ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
           FROM ActividadesUnicas
@@ -973,16 +1015,16 @@ const obtenerActividadesPorAlumno = async (req, res) => {
 
     console.log(`📊 Actividades obtenidas de BD: ${result.recordset.length}`);
 
-    // PASO 3: CALCULAR ESTADOS DINÁMICOS EN JAVASCRIPT
+    // PASO 3: CALCULAR ESTADOS DINÁMICOS EN JAVASCRIPT CON NUEVA INFORMACIÓN
     const actividadesConEstadosDinamicos = result.recordset.map(actividad => {
-      // 🆕 CALCULAR ESTADO DINÁMICO BASADO EN FECHA Y CALIFICACIONES REALES
+      // Calcular estado dinámico
       const estadoDinamico = calcularEstadoDinamico(
         actividad.fecha_entrega_raw || actividad.fecha_entrega,
         actividad.tiene_calificacion_bd === 1,
         actividad.estado_original
       );
 
-      console.log(`📝 Actividad "${actividad.titulo}": ${actividad.estado_original} → ${estadoDinamico.estado}`);
+      console.log(`📝 ${actividad.clasificacion_actividad === 'Final' ? '🎯' : '📄'} "${actividad.titulo}" (${actividad.tipo_componente}): ${actividad.estado_original} → ${estadoDinamico.estado}`);
 
       return {
         id_actividad: actividad.id_actividad,
@@ -992,7 +1034,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
         fecha_asignacion: actividad.fecha_asignacion,
         fecha_entrega: actividad.fecha_entrega,
         
-        // 🆕 ESTADO DINÁMICO PARA COMPATIBILIDAD CON TSX
+        // Estado dinámico
         estado: estadoDinamico.estado,
         estado_info: {
           mensaje: estadoDinamico.mensaje,
@@ -1008,39 +1050,51 @@ const obtenerActividadesPorAlumno = async (req, res) => {
         parcial: actividad.parcial,
         modalidad_tipo: actividad.modalidad_tipo,
         
-        // Información adicional para el frontend
+        // 🆕 NUEVA INFORMACIÓN DE COMPONENTES
+        tipo_componente: actividad.tipo_componente,
+        valor_componente: actividad.valor_componente,
+        clasificacion_actividad: actividad.clasificacion_actividad, // 'Normal' o 'Final'
+        es_actividad_final: actividad.clasificacion_actividad === 'Final',
+        
+        // Información adicional
         tiene_calificacion: actividad.tiene_calificacion_bd === 1,
         fuente_estado: 'DINAMICO_JS'
       };
     });
 
-    // PASO 4: ORDENAR POR URGENCIA (más urgentes primero)
+    // PASO 4: ORDENAR CON PRIORIDAD PARA ACTIVIDADES FINALES
     actividadesConEstadosDinamicos.sort((a, b) => {
-      // Primero por urgencia (menor número = más urgente)
+      // Primero las actividades finales críticas
+      if (a.es_actividad_final && !b.es_actividad_final && !a.tiene_calificacion) return -1;
+      if (b.es_actividad_final && !a.es_actividad_final && !b.tiene_calificacion) return 1;
+      
+      // Luego por urgencia
       if (a.estado_info.urgencia !== b.estado_info.urgencia) {
         return a.estado_info.urgencia - b.estado_info.urgencia;
       }
-      // Luego por fecha de entrega
+      
+      // Finalmente por fecha de entrega
       return new Date(a.fecha_entrega) - new Date(b.fecha_entrega);
     });
 
-    // PASO 5: LOG DE RESUMEN
-    console.log('📊 Resumen de estados dinámicos:');
-    const resumenEstados = actividadesConEstadosDinamicos.reduce((acc, act) => {
-      acc[act.estado] = (acc[act.estado] || 0) + 1;
+    // PASO 5: LOG DE RESUMEN CON NUEVA CLASIFICACIÓN
+    console.log('📊 Resumen de actividades por tipo:');
+    const resumenTipos = actividadesConEstadosDinamicos.reduce((acc, act) => {
+      const tipo = act.es_actividad_final ? `Final (${act.tipo_componente})` : `Normal (${act.tipo_componente})`;
+      acc[tipo] = (acc[tipo] || 0) + 1;
       return acc;
     }, {});
     
-    Object.entries(resumenEstados).forEach(([estado, count]) => {
-      console.log(`   - ${estado}: ${count} actividades`);
+    Object.entries(resumenTipos).forEach(([tipo, count]) => {
+      console.log(`   - ${tipo}: ${count} actividades`);
     });
 
-    console.log('🔍 === FIN ACTIVIDADES CON ESTADOS DINÁMICOS ===');
+    console.log('🔍 === FIN ACTIVIDADES CON ESTADOS DINÁMICOS Y COMPONENTES ===');
 
     res.json(actividadesConEstadosDinamicos);
 
   } catch (error) {
-    console.error('❌ Error al obtener actividades con estados dinámicos:', error);
+    console.error('❌ Error al obtener actividades con clasificación de componentes:', error);
     res.status(500).json({ 
       mensaje: 'Error en el servidor al obtener actividades del alumno',
       error: error.message 
