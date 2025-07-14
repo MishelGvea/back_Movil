@@ -10,7 +10,13 @@ const config = {
     options: {
         encrypt: false,
         trustServerCertificate: true,
-    }
+    },
+    pool: {
+        max: 10,
+        min: 0,
+        idleTimeoutMillis: 30000, // 🟡 tiempo de espera para conexiones inactivas
+    },
+    requestTimeout: 30000 // 🟢 tiempo de espera para consultas (30 segundos)
 };
 
 module.exports = { sql, config };
