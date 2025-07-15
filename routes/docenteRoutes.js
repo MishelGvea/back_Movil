@@ -29,6 +29,7 @@ const {
   obtenerGruposPorMateriaDocente,
   obtenerListasCotejo,
   obtenerActividadesPorGrupo,
+  obtenerEstadisticasGrupo, // ✅ AGREGAR ESTA LÍNEA
   crearActividad,
   crearActividadCompletaConComponente,
 
@@ -111,6 +112,10 @@ router.get('/componentes/dropdown/:claveDocente/:claveMateria/:parcial/:periodo'
 router.get('/:clave/materia/:clvMateria/grupos', obtenerGruposPorMateriaDocente);
 router.get('/:claveDocente/materia/:claveMateria/listas-cotejo', obtenerListasCotejo);
 router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/actividades', obtenerActividadesPorGrupo);
+
+// ✅ NUEVA RUTA PARA ESTADÍSTICAS DEL GRUPO
+router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/estadisticas', obtenerEstadisticasGrupo);
+
 router.post('/crear-actividad', crearActividad);
 router.post('/crear-actividad-completa-componente', crearActividadCompletaConComponente);
 

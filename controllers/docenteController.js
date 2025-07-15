@@ -1714,7 +1714,7 @@ const obtenerListasCotejo = async (req, res) => {
   }
 };
 
-// 🔧 CORREGIDO: Obtener actividades por grupo - SIN REFERENCIA A tbl_componentes
+/// 🔧 CORREGIDO: Obtener actividades por grupo - SIN REFERENCIA A tbl_componentes
 const obtenerActividadesPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
   
@@ -1806,12 +1806,33 @@ const obtenerActividadesPorGrupo = async (req, res) => {
           ELSE NULL
         END AS promedio,
         
-        -- Estado calculado de la actividad
+        -- Estado calculado INTELIGENTE de la actividad
         CASE 
-          WHEN ISNULL(a.id_estado_actividad, 3) = 1 THEN 'entregado'
-          WHEN ISNULL(a.id_estado_actividad, 3) = 2 THEN 'no_entregado'
-          WHEN ISNULL(a.id_estado_actividad, 3) = 3 THEN 'pendiente'
-          ELSE 'pendiente'
+          -- Si ya pasó la fecha de entrega
+          WHEN DATEDIFF(day, GETDATE(), ag.fecha_entrega) < 0 THEN 
+            CASE 
+              WHEN (SELECT COUNT(*) FROM tblAlumnos al 
+                    INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                    WHERE al.chvGrupo = @idGrupo) = 
+                   (SELECT COUNT(DISTINCT aa.vchMatricula) FROM tbl_actividad_alumno aa 
+                    INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
+                    WHERE aa.id_actividad = a.id_actividad)
+              THEN 'completada_tarde'
+              ELSE 'vencida'
+            END
+          -- Si aún hay tiempo
+          WHEN DATEDIFF(day, GETDATE(), ag.fecha_entrega) >= 0 THEN
+            CASE 
+              WHEN (SELECT COUNT(*) FROM tblAlumnos al 
+                    INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                    WHERE al.chvGrupo = @idGrupo) = 
+                   (SELECT COUNT(DISTINCT aa.vchMatricula) FROM tbl_actividad_alumno aa 
+                    INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
+                    WHERE aa.id_actividad = a.id_actividad)
+              THEN 'completada'
+              ELSE 'activa'
+            END
+          ELSE 'activa'
         END AS estadoCalculado,
         
         -- Días restantes
@@ -1840,7 +1861,36 @@ const obtenerActividadesPorGrupo = async (req, res) => {
             END
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 100
           ELSE 0
-        END AS porcentajeCompletado
+        END AS porcentajeCompletado,
+
+        -- ✅ NUEVA COLUMNA: Alumnos sin calificar
+        CASE 
+          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+            -- Para modalidad individual: total alumnos - alumnos con calificación
+            (SELECT COUNT(*) 
+             FROM tblAlumnos al 
+             INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+               AND al.vchPeriodo = dm.Periodo
+             WHERE al.chvGrupo = @idGrupo 
+               AND dm.vchClvTrabajador = @claveDocente 
+               AND dm.vchClvMateria = @claveMateria
+               AND al.vchMatricula NOT IN (
+                 SELECT aa.vchMatricula 
+                 FROM tbl_actividad_alumno aa
+                 INNER JOIN tbl_evaluacion_criterioActividad ec ON aa.id_actividad_alumno = ec.id_actividad_alumno
+                 WHERE aa.id_actividad = a.id_actividad
+               ))
+          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
+            -- Para modalidad equipo: equipos sin calificar
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             WHERE ae.id_actividad = a.id_actividad
+               AND ae.id_actividad_equipo NOT IN (
+                 SELECT DISTINCT ece.id_actividad_equipo 
+                 FROM tbl_evaluacion_criterioActividadEquipo ece
+               ))
+          ELSE 0
+        END AS alumnosSinCalificar
 
       FROM tbl_actividades a
       INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
@@ -1851,23 +1901,73 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       ${whereConditions}
       ORDER BY i.parcial, a.numero_actividad DESC, a.fecha_creacion DESC
     `);
-
+    
     console.log(`✅ Encontradas ${result.recordset.length} actividades`);
 
     // Procesar resultados y agrupar por parcial
     const actividadesPorParcial = {};
-    let estadisticasGenerales = {
-      totalActividades: result.recordset.length,
-      entregado: 0,
-      no_entregado: 0,
-      pendiente: 0,
-      promedioGeneral: 0,
-      porcentajeCompletadoGeneral: 0
+    
+    // 🎯 AQUÍ PONER LAS ESTADÍSTICAS OPTIMIZADAS - JUSTO DESPUÉS DE procesar resultados
+    const estadisticasOptimizadas = await pool.request()
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('idGrupo', sql.Int, idGrupo)
+      .query(`
+        WITH EstadisticasActividades AS (
+          SELECT 
+            a.id_actividad,
+            CASE 
+              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+                (SELECT COUNT(*) 
+                 FROM tblAlumnos al 
+                 INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                   AND al.vchPeriodo = dm.Periodo
+                 WHERE al.chvGrupo = @idGrupo 
+                   AND dm.vchClvTrabajador = @claveDocente 
+                   AND dm.vchClvMateria = @claveMateria
+                   AND al.vchMatricula NOT IN (
+                     SELECT aa.vchMatricula 
+                     FROM tbl_actividad_alumno aa
+                     INNER JOIN tbl_evaluacion_criterioActividad ec 
+                       ON aa.id_actividad_alumno = ec.id_actividad_alumno
+                     WHERE aa.id_actividad = a.id_actividad
+                   ))
+              ELSE 
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_equipo ae 
+                 WHERE ae.id_actividad = a.id_actividad
+                   AND ae.id_actividad_equipo NOT IN (
+                     SELECT DISTINCT ece.id_actividad_equipo 
+                     FROM tbl_evaluacion_criterioActividadEquipo ece
+                     WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
+                   ))
+            END AS alumnosSinCalificar,
+            CASE 
+              WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 1 ELSE 0 
+            END AS yaVencio
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          WHERE i.vchClvTrabajador = @claveDocente
+            AND i.vchClvMateria = @claveMateria
+            AND ag.id_grupo = @idGrupo
+        )
+        SELECT 
+          SUM(CASE WHEN alumnosSinCalificar = 0 THEN 1 ELSE 0 END) as completas,
+          SUM(alumnosSinCalificar) as porCalificar,
+          SUM(CASE WHEN yaVencio = 1 AND alumnosSinCalificar > 0 THEN 1 ELSE 0 END) as vencidas,
+          COUNT(*) as total
+        FROM EstadisticasActividades
+      `);
+
+    const estadisticasOptimizadasData = estadisticasOptimizadas.recordset[0] || {
+      completas: 0,
+      porCalificar: 0,
+      vencidas: 0,
+      total: 0
     };
 
-    let sumaPromedios = 0;
-    let sumaCompletado = 0;
-    let contadorConPromedio = 0;
+    console.log('📊 Estadísticas optimizadas:', estadisticasOptimizadasData);
 
     result.recordset.forEach(actividad => {
       const parcial = actividad.parcial;
@@ -1884,21 +1984,10 @@ const obtenerActividadesPorGrupo = async (req, res) => {
             pendiente: 0
           }
         };
-      }
+      }   
       
-      // Determinar estado y actualizar estadísticas
-      const estado = actividad.estadoCalculado;
-      estadisticasGenerales[estado] = (estadisticasGenerales[estado] || 0) + 1;
-      actividadesPorParcial[parcial].estadisticas[estado] = (actividadesPorParcial[parcial].estadisticas[estado] || 0) + 1;
-      actividadesPorParcial[parcial].estadisticas.total++;
-      
-      // Acumular promedios
-      if (actividad.promedio) {
-        sumaPromedios += actividad.promedio;
-        contadorConPromedio++;
-      }
-      
-      sumaCompletado += actividad.porcentajeCompletado || 0;
+      // ✅ USAR EL ESTADO CALCULADO DE LA CONSULTA
+      const estadoCalculado = actividad.estadoCalculado;
       
       // Formatear actividad para respuesta
       actividadesPorParcial[parcial].actividades.push({
@@ -1909,7 +1998,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         fecha_asignacion: actividad.fecha_asignacion,
         numero_actividad: actividad.numero_actividad,
         modalidad: (actividad.id_modalidad === 2) ? 'equipo' : 'individual',
-        estado: estado,
+        estado: estadoCalculado, // ✅ USAR LA VARIABLE CORRECTA
         totalEntregas: actividad.totalEntregas || 0,
         totalEsperados: actividad.totalEsperados || 0,
         promedio: actividad.promedio ? Number(actividad.promedio.toFixed(1)) : null,
@@ -1919,17 +2008,11 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         instrumento: actividad.nombre_instrumento,
         componente: actividad.nombre_componente || 'Sin componente',
         parcial: actividad.parcial,
-        urgente: actividad.diasRestantes <= 2 && estado === 'pendiente',
-        requiereAtencion: (actividad.porcentajeCompletado || 0) < 50 && estado === 'pendiente'
+        urgente: actividad.diasRestantes <= 2 && estadoCalculado === 'pendiente',
+        requiereAtencion: (actividad.porcentajeCompletado || 0) < 50 && estadoCalculado === 'pendiente',
+        alumnosSinCalificar: actividad.alumnosSinCalificar || 0
       });
     });
-
-    // Calcular estadísticas generales
-    estadisticasGenerales.promedioGeneral = contadorConPromedio > 0 ? 
-      Number((sumaPromedios / contadorConPromedio).toFixed(1)) : 0;
-    estadisticasGenerales.porcentajeCompletadoGeneral = 
-      estadisticasGenerales.totalActividades > 0 ? 
-      Number((sumaCompletado / estadisticasGenerales.totalActividades).toFixed(1)) : 0;
 
     // Convertir parciales a array ordenado
     const parciales = Object.keys(actividadesPorParcial)
@@ -1937,19 +2020,25 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       .sort((a, b) => a - b)
       .map(parcial => actividadesPorParcial[parcial]);
 
-    console.log(`📊 Estadísticas: ${estadisticasGenerales.totalActividades} total`);
+    console.log(`📊 Estadísticas: ${estadisticasOptimizadasData.total} total`);
 
+    // 🎯 RESPUESTA FINAL CORREGIDA:
     res.json({
       parciales,
-      estadisticas: estadisticasGenerales,
-      totalPendientes: estadisticasGenerales.pendiente
+      estadisticas: {
+        totalActividades: estadisticasOptimizadasData.total,
+        completas: estadisticasOptimizadasData.completas,
+        porCalificar: estadisticasOptimizadasData.porCalificar,
+        vencidas: estadisticasOptimizadasData.vencidas
+      },
+      totalPendientes: estadisticasOptimizadasData.porCalificar
     });
 
   } catch (error) {
-    console.error('❌ Error al obtener actividades del grupo:', error);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
+    console.error('❌ Error al obtener actividades por grupo:', error);
+    res.status(500).json({ error: 'Error del servidor' });
   }
-};
+}; // ✅ AQUÍ ESTABA EL PROBLEMA - FALTABA CERRAR CORRECTAMENTE
 
 // Cambiar contraseña del docente
 const cambiarContrasenaDocente = async (req, res) => {
@@ -2769,11 +2858,129 @@ const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
     console.error('❌ Error al obtener materias por periodo específico:', err);
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
-};
+}
 
 // ===============================================
 // 🆕 FUNCIÓN ORIGINAL MANTENIDA PARA COMPATIBILIDAD
 // ===============================================
+// Obtener estadísticas optimizadas de un grupo específico
+    async function obtenerEstadisticasGrupo(req, res) {
+      const { claveDocente, claveMateria, idGrupo } = req.params;
+
+      try {
+        const pool = await sql.connect(config);
+
+        console.log(`📊 Calculando estadísticas optimizadas para: Docente=${claveDocente}, Materia=${claveMateria}, Grupo=${idGrupo}`);
+
+        const result = await pool.request()
+          .input('claveDocente', sql.VarChar, claveDocente)
+          .input('claveMateria', sql.VarChar, claveMateria)
+          .input('idGrupo', sql.Int, idGrupo)
+          .query(`
+        WITH EstadisticasActividades AS (
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            ag.fecha_entrega,
+            ISNULL(a.id_modalidad, 1) as modalidad,
+            
+            -- 📝 Calcular alumnos sin calificar por actividad
+            CASE 
+              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+                -- Modalidad individual: alumnos del grupo sin calificación
+                (SELECT COUNT(*) 
+                 FROM tblAlumnos al 
+                 INNER JOIN tbl_docente_materia dm ON al.vchClvCuatri = dm.vchCuatrimestre 
+                   AND al.vchPeriodo = dm.Periodo
+                 WHERE al.chvGrupo = @idGrupo 
+                   AND dm.vchClvTrabajador = @claveDocente 
+                   AND dm.vchClvMateria = @claveMateria
+                   AND al.vchMatricula NOT IN (
+                     SELECT aa.vchMatricula 
+                     FROM tbl_actividad_alumno aa
+                     INNER JOIN tbl_evaluacion_criterioActividad ec 
+                       ON aa.id_actividad_alumno = ec.id_actividad_alumno
+                     WHERE aa.id_actividad = a.id_actividad
+                   ))
+              WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
+                -- Modalidad equipo: equipos sin calificar
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_equipo ae 
+                 WHERE ae.id_actividad = a.id_actividad
+                   AND ae.id_actividad_equipo NOT IN (
+                     SELECT DISTINCT ece.id_actividad_equipo 
+                     FROM tbl_evaluacion_criterioActividadEquipo ece
+                     WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
+                   ))
+              ELSE 0
+            END AS alumnosSinCalificar,
+            
+            -- 🚨 Verificar si ya venció
+            CASE 
+              WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 1 
+              ELSE 0 
+            END AS yaVencio
+            
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          WHERE i.vchClvTrabajador = @claveDocente
+            AND i.vchClvMateria = @claveMateria
+            AND ag.id_grupo = @idGrupo
+        )
+        
+        SELECT 
+          -- ✅ Actividades 100% calificadas
+          SUM(CASE WHEN alumnosSinCalificar = 0 THEN 1 ELSE 0 END) as actividadesCompletas,
+          
+          -- 📝 Total de alumnos/equipos pendientes de calificar
+          SUM(alumnosSinCalificar) as totalAlumnosPendientes,
+          
+          -- 🚨 Actividades vencidas que aún tienen pendientes
+          SUM(CASE WHEN yaVencio = 1 AND alumnosSinCalificar > 0 THEN 1 ELSE 0 END) as actividadesVencidas,
+          
+          -- 📊 Total de actividades del grupo
+          COUNT(*) as totalActividades,
+          
+          -- 🎯 Estadísticas adicionales útiles
+          SUM(CASE WHEN yaVencio = 0 AND alumnosSinCalificar > 0 THEN 1 ELSE 0 END) as actividadesActivasConPendientes,
+          SUM(CASE WHEN yaVencio = 0 AND alumnosSinCalificar = 0 THEN 1 ELSE 0 END) as actividadesCompletasATiempo,
+          SUM(CASE WHEN yaVencio = 1 AND alumnosSinCalificar = 0 THEN 1 ELSE 0 END) as actividadesCompletasTarde
+          
+        FROM EstadisticasActividades
+      `);
+
+        const stats = result.recordset[0] || {
+          actividadesCompletas: 0,
+          totalAlumnosPendientes: 0,
+          actividadesVencidas: 0,
+          totalActividades: 0,
+          actividadesActivasConPendientes: 0,
+          actividadesCompletasATiempo: 0,
+          actividadesCompletasTarde: 0
+        };
+
+        console.log(`✅ Estadísticas calculadas:`, stats);
+
+        // 🎯 Agregar metadatos útiles
+        const response = {
+          ...stats,
+          metadata: {
+            grupoId: idGrupo,
+            timestamp: new Date().toISOString(),
+            porcentajeCompletado: stats.totalActividades > 0 ?
+              Math.round((stats.actividadesCompletas / stats.totalActividades) * 100) : 0,
+            requiereAtencion: stats.actividadesVencidas > 0 || stats.totalAlumnosPendientes > 20
+          }
+        };
+
+        res.json(response);
+
+        } catch (error) {
+    console.error('❌ Error al obtener estadísticas del grupo:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }  // ✅ Sin punto y coma
+};
 
 // Crear actividad original (sin componente) - MANTENIDA PARA COMPATIBILIDAD
 const crearActividad = async (req, res) => {
@@ -2879,6 +3086,7 @@ const crearActividad = async (req, res) => {
 
 // ===============================================
 // EXPORTS COMPLETOS ACTUALIZADOS
+// EXPORTS COMPLETOS ACTUALIZADOS
 // ===============================================
 module.exports = {
   // Funciones básicas del docente
@@ -2903,14 +3111,16 @@ module.exports = {
   validarComplecionParcial,
   obtenerEstadisticasGeneralesDocente,
   clonarComponentesParcial,
+  
   // Funciones de grupos y actividades
   obtenerGruposPorMateriaDocente,
   obtenerListasCotejo,
   obtenerActividadesPorGrupo,
+  obtenerEstadisticasGrupo, // 🎯 AGREGAR ESTA LÍNEA
   
   // Funciones de creación de actividades
-  crearActividad, // Original (sin componente)
-  crearActividadCompletaConComponente, // Nueva (con componente)
+  crearActividad,
+  crearActividadCompletaConComponente,
   
   // Funciones de manejo de equipos
   obtenerEquiposPorGrupo,
