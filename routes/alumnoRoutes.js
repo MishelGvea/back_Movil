@@ -4,7 +4,6 @@ const router = express.Router();
 const {
   obtenerDatosAlumno,
   cambiarContrasena,
-  editarPerfil,
   obtenerActividadesPorAlumno,
   obtenerCalificacionesHistoricas, 
   obtenerDetalleActividad,
