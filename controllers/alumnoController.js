@@ -1033,10 +1033,10 @@ const obtenerDetalleActividad = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    console.log(`🔍 === DETALLE ACTIVIDAD (PERÍODO AUTOMÁTICO) ===`);
+    console.log(`🔍 === DETALLE ACTIVIDAD (CON OBSERVACIONES) ===`);
     console.log(`📋 Parámetros: Matrícula: ${matricula}, ID Actividad: ${idActividad}`);
 
-    // PASO 1: Verificar acceso
+    // PASO 1: Verificar acceso del alumno a la actividad
     const verificacionResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('idActividad', sql.Int, idActividad)
@@ -1076,6 +1076,9 @@ const obtenerDetalleActividad = async (req, res) => {
       return res.status(404).json({ mensaje: 'Actividad no encontrada o sin acceso' });
     }
 
+    const modalidad = verificacionResult.recordset[0].id_modalidad;
+    console.log(`🎯 Modalidad de actividad: ${modalidad}`);
+
     // PASO 2: Obtener detalles de la actividad con fechas corregidas
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
@@ -1110,7 +1113,7 @@ const obtenerDetalleActividad = async (req, res) => {
           END as modalidad_nombre
         FROM tbl_actividades AC
         INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = I.idPeriodo
+        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = M.idPeriodo
         INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
         INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
         INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
@@ -1123,7 +1126,68 @@ const obtenerDetalleActividad = async (req, res) => {
 
     const actividad = result.recordset[0];
 
-    // PASO 3: Verificar criterios
+    // 🔧 PASO 3: OBTENER OBSERVACIONES SEGÚN LA MODALIDAD
+    let observaciones = null;
+    
+    console.log(`💬 Buscando observaciones para modalidad ${modalidad}...`);
+    
+    if (modalidad === 1) {
+      // MODALIDAD INDIVIDUAL
+      const obsResult = await pool.request()
+        .input('idActividad', sql.Int, idActividad)
+        .input('matricula', sql.VarChar, matricula)
+        .query(`
+          SELECT AA.observacion
+          FROM tbl_actividad_alumno AA
+          WHERE AA.id_actividad = @idActividad 
+          AND AA.vchMatricula = @matricula
+        `);
+      
+      if (obsResult.recordset.length > 0) {
+        observaciones = obsResult.recordset[0].observacion;
+        console.log(`✅ Observaciones INDIVIDUAL encontradas: "${observaciones}"`);
+      } else {
+        console.log(`ℹ️ No se encontró registro individual para actividad ${idActividad}, alumno ${matricula}`);
+      }
+      
+    } else if (modalidad === 2) {
+      // MODALIDAD EQUIPO
+      const obsResult = await pool.request()
+        .input('idActividad', sql.Int, idActividad)
+        .input('matricula', sql.VarChar, matricula)
+        .query(`
+          SELECT AE.observacion
+          FROM tbl_actividad_equipo AE
+          INNER JOIN tbl_equipos E ON AE.id_equipo = E.id_equipo
+          INNER JOIN tbl_equipo_alumno EA ON E.id_equipo = EA.id_equipo
+          WHERE AE.id_actividad = @idActividad 
+          AND EA.vchMatricula = @matricula
+        `);
+      
+      if (obsResult.recordset.length > 0) {
+        observaciones = obsResult.recordset[0].observacion;
+        console.log(`✅ Observaciones EQUIPO encontradas: "${observaciones}"`);
+      } else {
+        console.log(`ℹ️ No se encontró registro de equipo para actividad ${idActividad}, alumno ${matricula}`);
+      }
+      
+    } else if (modalidad === 3) {
+      // MODALIDAD GRUPO - Las observaciones estarían en la actividad general o en registros específicos
+      console.log(`ℹ️ Modalidad GRUPO: las observaciones están a nivel general`);
+      observaciones = null; // Modalidad grupo normalmente no tiene observaciones individuales
+    }
+
+    // 🔧 LIMPIAR Y VALIDAR OBSERVACIONES
+    if (observaciones) {
+      observaciones = observaciones.trim();
+      if (observaciones.length === 0) {
+        observaciones = null;
+      }
+    }
+
+    console.log(`💬 Observaciones finales: ${observaciones ? `"${observaciones}"` : 'null'}`);
+
+    // PASO 4: Verificar criterios
     const criteriosDefinidos = await pool.request()
       .input('idInstrumento', sql.Int, actividad.id_instrumento)
       .query(`
@@ -1135,10 +1199,10 @@ const obtenerDetalleActividad = async (req, res) => {
     const totalCriteriosDefinidos = criteriosDefinidos.recordset[0]?.total_criterios || 0;
     const instrumentoTieneCriterios = totalCriteriosDefinidos > 0;
 
-    // PASO 4: Verificar calificación
+    // PASO 5: Verificar calificación
     const calificacionReal = await obtenerCalificacionRealActividad(pool, idActividad, matricula);
     
-    // PASO 5: Manejo de criterios
+    // PASO 6: Manejo de criterios
     let rubrica = [];
     let estadoCriterios = {
       instrumento_tiene_criterios: instrumentoTieneCriterios,
@@ -1202,14 +1266,14 @@ const obtenerDetalleActividad = async (req, res) => {
       rubrica = [];
     }
 
-    // PASO 6: Calcular estado dinámico con función corregida
+    // PASO 7: Calcular estado dinámico con función corregida
     const estadoDinamico = calcularEstadoDinamico(
       actividad.fecha_entrega_raw,
       calificacionReal !== null,
       actividad.estado_original
     );
 
-    // PASO 7: Respuesta
+    // PASO 8: Respuesta CON OBSERVACIONES INCLUIDAS
     const response = {
       id_actividad: actividad.id_actividad,
       titulo: actividad.titulo,
@@ -1226,6 +1290,9 @@ const obtenerDetalleActividad = async (req, res) => {
       id_modalidad: actividad.id_modalidad,
       modalidad_nombre: actividad.modalidad_nombre,
       rubrica: rubrica,
+      
+      // 🆕 INCLUIR OBSERVACIONES CORRECTAMENTE
+      observaciones: observaciones, // Puede ser null, string vacío, o string con contenido
       
       tiene_calificacion: calificacionReal !== null,
       calificacion_info: calificacionReal ? {
@@ -1250,23 +1317,23 @@ const obtenerDetalleActividad = async (req, res) => {
         urgencia: estadoDinamico.urgencia
       },
       
-      fuente_calculo: 'FECHAS_CORREGIDAS_SIN_UTC'
+      fuente_calculo: 'FECHAS_CORREGIDAS_CON_OBSERVACIONES'
     };
 
-    console.log(`✅ Detalle obtenido (fechas corregidas): ${response.titulo}`);
+    console.log(`✅ Detalle obtenido con observaciones: ${response.titulo}`);
+    console.log(`💬 Observaciones incluidas: ${observaciones ? 'SÍ' : 'NO'}`);
     console.log(`🔍 === FIN DETALLE ACTIVIDAD ===`);
 
     res.json(response);
 
   } catch (error) {
-    console.error('❌ Error al obtener detalle (período automático):', error);
+    console.error('❌ Error al obtener detalle:', error);
     res.status(500).json({ 
       mensaje: 'Error en el servidor al obtener detalle de actividad',
       error: error.message 
     });
   }
 };
-
 // ===============================================
 // 🔧 FUNCIÓN CORREGIDA: obtenerActividadesEntregadas
 // ===============================================
@@ -1463,26 +1530,30 @@ const obtenerActividadEntregada = async (req, res) => {
     } catch (error) {
       console.log(`⚠️ Error al obtener total de puntos: ${error.message}`);
     }
-
-    // Obtener observaciones (simplificado)
-    let observaciones = 'Sin observaciones registradas';
-    try {
-      const obsResult = await pool.request()
-        .input('idActividad', sql.Int, idActividad)
-        .input('matricula', sql.VarChar, matricula)
-        .query(`
-          SELECT ISNULL(AA.observacion, 'Sin observaciones registradas') as observacion
-          FROM tbl_actividad_alumno AA
-          WHERE AA.id_actividad = @idActividad 
-          AND AA.vchMatricula = @matricula
-        `);
-      
-      if (obsResult.recordset.length > 0) {
-        observaciones = obsResult.recordset[0].observacion || 'Sin observaciones registradas';
-      }
-    } catch (obsError) {
-      console.log(`⚠️ No se pudieron obtener observaciones`);
-    }
+   // A:
+let observaciones = null;
+try {
+  const obsResult = await pool.request()
+    .input('idActividad', sql.Int, idActividad)
+    .input('matricula', sql.VarChar, matricula)
+    .query(`
+      SELECT observacion
+      FROM tbl_actividad_alumno AA
+      WHERE AA.id_actividad = @idActividad 
+      AND AA.vchMatricula = @matricula
+      AND observacion IS NOT NULL
+      AND LTRIM(RTRIM(observacion)) != ''
+    `);
+  
+  if (obsResult.recordset.length > 0) {
+    observaciones = obsResult.recordset[0].observacion;
+    console.log(`✅ Observaciones encontradas: "${observaciones}"`);
+  } else {
+    console.log(`ℹ️ Sin observaciones para actividad ${idActividad}, alumno ${matricula}`);
+  }
+} catch (obsError) {
+  console.log(`⚠️ Error al obtener observaciones: ${obsError.message}`);
+}
 
     // Obtener criterios calificados
     const criteriosCalificados = await obtenerCriteriosCalificadosReales(pool, idActividad, matricula);

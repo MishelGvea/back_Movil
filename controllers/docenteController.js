@@ -2833,12 +2833,15 @@ const obtenerAlumnosParaCalificar = async (req, res) => {
 };
 
 // Obtener calificaciones existentes de un alumno - CORREGIDA
+// Obtener calificaciones existentes de un alumno - CORREGIDA
 const obtenerCalificacionesAlumno = async (req, res) => {
   const { idActividadAlumno } = req.params;
 
   try {
     const pool = await sql.connect(config);
-    const result = await pool.request()
+    
+    // Obtener calificaciones
+    const calificacionesResult = await pool.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .query(`
         SELECT 
@@ -2852,7 +2855,21 @@ const obtenerCalificacionesAlumno = async (req, res) => {
         ORDER BY c.id_criterio
       `);
 
-    res.json(result.recordset);
+    // 🆕 OBTENER OBSERVACIÓN
+    const observacionResult = await pool.request()
+      .input('idActividadAlumno', sql.Int, idActividadAlumno)
+      .query(`
+        SELECT observacion
+        FROM tbl_actividad_alumno
+        WHERE id_actividad_alumno = @idActividadAlumno
+      `);
+
+    // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
+    res.json({
+      calificaciones: calificacionesResult.recordset,
+      observacion: observacionResult.recordset[0]?.observacion || null
+    });
+
   } catch (error) {
     console.error('❌ Error al obtener calificaciones del alumno:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -2860,12 +2877,15 @@ const obtenerCalificacionesAlumno = async (req, res) => {
 };
 
 // Obtener calificaciones existentes de un equipo - CORREGIDA
+// Obtener calificaciones existentes de un equipo - CORREGIDA
 const obtenerCalificacionesEquipo = async (req, res) => {
   const { idActividadEquipo } = req.params;
 
   try {
     const pool = await sql.connect(config);
-    const result = await pool.request()
+    
+    // Obtener calificaciones
+    const calificacionesResult = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .query(`
         SELECT 
@@ -2879,16 +2899,30 @@ const obtenerCalificacionesEquipo = async (req, res) => {
         ORDER BY c.id_criterio
       `);
 
-    res.json(result.recordset);
+    // 🆕 OBTENER OBSERVACIÓN
+    const observacionResult = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT observacion
+        FROM tbl_actividad_equipo
+        WHERE id_actividad_equipo = @idActividadEquipo
+      `);
+
+    // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
+    res.json({
+      calificaciones: calificacionesResult.recordset,
+      observacion: observacionResult.recordset[0]?.observacion || null
+    });
+
   } catch (error) {
     console.error('❌ Error al obtener calificaciones del equipo:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 // 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON ACTUALIZACIÓN DE ESTADO
+// 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON OBSERVACIONES
 const guardarCalificacionesAlumno = async (req, res) => {
-  const { idActividadAlumno, calificaciones } = req.body;
+  const { idActividadAlumno, calificaciones, observacion } = req.body; // 🆕 AGREGAR observacion
   // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
 
   const transaction = new sql.Transaction();
@@ -2898,6 +2932,8 @@ const guardarCalificacionesAlumno = async (req, res) => {
     await transaction.begin();
 
     console.log(`📝 Guardando calificaciones para alumno ID: ${idActividadAlumno}`);
+    console.log(`💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:`, observacion); // 🆕 DEBUG LOG
+    console.log(`📊 CALIFICACIONES:`, calificaciones);
 
     // Eliminar calificaciones existentes
     await transaction.request()
@@ -2920,22 +2956,26 @@ const guardarCalificacionesAlumno = async (req, res) => {
         `);
     }
 
-    // 🆕 ACTUALIZAR ESTADO A "ENTREGADO" (2)
+    // 🆕 ACTUALIZAR ESTADO Y OBSERVACIÓN EN UNA SOLA QUERY
     await transaction.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+      .input('observacion', sql.NVarChar, observacion || null) // 🆕 OBSERVACIÓN
       .query(`
         UPDATE tbl_actividad_alumno 
-        SET id_estado = @nuevoEstado 
+        SET id_estado = @nuevoEstado, observacion = @observacion 
         WHERE id_actividad_alumno = @idActividadAlumno
       `);
 
     await transaction.commit();
     
     console.log(`✅ Calificaciones guardadas y estado actualizado a "Entregado"`);
+    console.log(`💬 Observación final guardada: "${observacion}"`); // 🆕 CONFIRMACIÓN LOG
+    
     res.json({ 
-      mensaje: 'Calificaciones guardadas correctamente',
-      estadoActualizado: 'Entregado'
+      mensaje: 'Calificaciones y observación guardadas correctamente',
+      estadoActualizado: 'Entregado',
+      observacionGuardada: observacion // 🆕 RESPUESTA CON CONFIRMACIÓN
     });
 
   } catch (error) {
@@ -2945,9 +2985,8 @@ const guardarCalificacionesAlumno = async (req, res) => {
   }
 };
 
-// 🔧 CORREGIDO: Guardar calificaciones de un equipo - CON ACTUALIZACIÓN DE ESTADO
 const guardarCalificacionesEquipo = async (req, res) => {
-  const { idActividadEquipo, idEquipo, calificaciones } = req.body;
+  const { idActividadEquipo, idEquipo, calificaciones, observacion } = req.body; // 🆕 AGREGAR observacion
 
   const transaction = new sql.Transaction();
 
@@ -2959,6 +2998,7 @@ const guardarCalificacionesEquipo = async (req, res) => {
     console.log('📋 idActividadEquipo:', idActividadEquipo);
     console.log('👥 idEquipo:', idEquipo);
     console.log('📊 Calificaciones:', calificaciones);
+    console.log('💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:', observacion); // 🆕 DEBUG LOG
 
     // PASO 1: Eliminar calificaciones existentes del equipo
     await transaction.request()
@@ -3013,13 +3053,14 @@ const guardarCalificacionesEquipo = async (req, res) => {
         `);
     }
 
-    // 🆕 PASO 5: ACTUALIZAR ESTADO DEL EQUIPO A "ENTREGADO" (2)
+    // 🆕 PASO 5: ACTUALIZAR ESTADO Y OBSERVACIÓN DEL EQUIPO
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+      .input('observacion', sql.NVarChar, observacion || null) // 🆕 OBSERVACIÓN
       .query(`
         UPDATE tbl_actividad_equipo 
-        SET id_estado = @nuevoEstado 
+        SET id_estado = @nuevoEstado, observacion = @observacion 
         WHERE id_actividad_equipo = @idActividadEquipo
       `);
 
@@ -3045,9 +3086,10 @@ const guardarCalificacionesEquipo = async (req, res) => {
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
           .input('estadoInicial', sql.Int, 2) // 🆕 CREAR CON ESTADO "ENTREGADO"
+          .input('observacion', sql.NVarChar, observacion || null) // 🆕 REPLICAR OBSERVACIÓN
           .query(`
-            INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado)
-            VALUES (@idActividad, @matricula, @estadoInicial)
+            INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado, observacion)
+            VALUES (@idActividad, @matricula, @estadoInicial, @observacion)
           `);
         
         // Obtener el ID insertado
@@ -3065,13 +3107,14 @@ const guardarCalificacionesEquipo = async (req, res) => {
       } else {
         idActividadAlumno = actividadAlumnoResult.recordset[0].id_actividad_alumno;
         
-        // 🆕 ACTUALIZAR ESTADO A "ENTREGADO"
+        // 🆕 ACTUALIZAR ESTADO Y OBSERVACIÓN
         await transaction.request()
           .input('idActividadAlumno', sql.Int, idActividadAlumno)
           .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+          .input('observacion', sql.NVarChar, observacion || null) // 🆕 REPLICAR OBSERVACIÓN
           .query(`
             UPDATE tbl_actividad_alumno 
-            SET id_estado = @nuevoEstado 
+            SET id_estado = @nuevoEstado, observacion = @observacion 
             WHERE id_actividad_alumno = @idActividadAlumno
           `);
         
@@ -3106,13 +3149,15 @@ const guardarCalificacionesEquipo = async (req, res) => {
     console.log(`📊 Calificaciones replicadas a ${integrantes.length} integrantes`);
     console.log(`🔧 Criterios calificados: ${calificaciones.length}`);
     console.log(`🎯 Estados actualizados a "Entregado"`);
+    console.log(`💬 Observación final guardada: "${observacion}"`); // 🆕 CONFIRMACIÓN LOG
     
     res.json({ 
       mensaje: 'Calificaciones del equipo guardadas correctamente',
       integrantes_calificados: integrantes.length,
       criterios_calificados: calificaciones.length,
       estadoActualizado: 'Entregado',
-      detalle: `Se replicaron las calificaciones a ${integrantes.length} integrantes del equipo`
+      observacionGuardada: observacion, // 🆕 CONFIRMACIÓN EN RESPUESTA
+      detalle: `Se replicaron las calificaciones y observación a ${integrantes.length} integrantes del equipo`
     });
 
   } catch (error) {
@@ -3124,10 +3169,11 @@ const guardarCalificacionesEquipo = async (req, res) => {
     });
   }
 };
-
 // ===============================================
 // 🆕 FUNCIONES AUXILIARES ADICIONALES
 // ===============================================
+
+
 
 // Obtener periodos de un docente (debug)
 const obtenerPeriodosDocente = async (req, res) => {
