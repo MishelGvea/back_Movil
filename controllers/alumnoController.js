@@ -2100,6 +2100,503 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
   }
 };
 
+const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
+  const { matricula } = req.params;
+  const { todos_periodos } = req.query;
+
+  try {
+    const pool = await sql.connect(config);
+
+    console.log(`🎓 === CALIFICACIONES POR PARCIALES (LÓGICA INTELIGENTE VENCIDAS) ===`);
+
+    // 🆕 DETECTAR PERÍODO AUTOMÁTICAMENTE
+    const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
+    console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
+
+    // Construir filtros dinámicos
+    let whereClause = '';
+    
+    if (!todos_periodos || todos_periodos !== 'true') {
+      whereClause = `AND i.vchPeriodo = @periodo_detectado AND m.vchCuatrimestre = @cuatrimestre_alumno`;
+      console.log(`📅 Filtrando solo período detectado: ${periodoInfo.periodo}`);
+    } else {
+      console.log(`📅 Obteniendo TODOS los períodos`);
+    }
+
+    // 🔧 PRIMERA CONSULTA: OBTENER **TODAS** LAS ACTIVIDADES QUE EXISTEN
+    const todasLasActividades = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
+      .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
+      .input('grupo_alumno', sql.VarChar, periodoInfo.grupo)
+      .query(`
+        WITH ActividadesUnicas AS (
+          -- MODALIDAD 1: INDIVIDUAL
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            m.vchNomMateria as materia,
+            i.vchPeriodo as periodo,
+            CASE 
+              WHEN i.parcial = 1 THEN 'Parcial 1'
+              WHEN i.parcial = 2 THEN 'Parcial 2'
+              WHEN i.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            ins.nombre as instrumento,
+            ti.nombre_tipo as tipoInstrumento,
+            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
+            ISNULL(vce.valor_componente, 2) as valor_componente,
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            -- 🆕 INCLUIR FECHA DE ENTREGA PARA EVALUACIÓN DE VENCIMIENTO
+            ag.fecha_entrega as fecha_entrega_raw,
+            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
+            'Individual' as modalidad,
+            a.id_modalidad,
+            1 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
+          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
+          WHERE aa.vchMatricula = @matricula 
+          AND i.vchPeriodo = @periodo_detectado
+          AND m.vchCuatrimestre = @cuatrimestre_alumno
+          AND a.id_modalidad = 1
+
+          UNION ALL
+
+          -- MODALIDAD 2: EQUIPO
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            m.vchNomMateria as materia,
+            i.vchPeriodo as periodo,
+            CASE 
+              WHEN i.parcial = 1 THEN 'Parcial 1'
+              WHEN i.parcial = 2 THEN 'Parcial 2'
+              WHEN i.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            ins.nombre as instrumento,
+            ti.nombre_tipo as tipoInstrumento,
+            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
+            ISNULL(vce.valor_componente, 2) as valor_componente,
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            ag.fecha_entrega as fecha_entrega_raw,
+            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
+            'Equipo' as modalidad,
+            a.id_modalidad,
+            2 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
+          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
+          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+          INNER JOIN tbl_equipo_alumno ea_alumno ON e.id_equipo = ea_alumno.id_equipo
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
+          WHERE ea_alumno.vchMatricula = @matricula 
+          AND i.vchPeriodo = @periodo_detectado
+          AND m.vchCuatrimestre = @cuatrimestre_alumno
+          AND a.id_modalidad = 2
+
+          UNION ALL
+
+          -- MODALIDAD 3: GRUPO
+          SELECT 
+            a.id_actividad,
+            a.titulo,
+            m.vchNomMateria as materia,
+            i.vchPeriodo as periodo,
+            CASE 
+              WHEN i.parcial = 1 THEN 'Parcial 1'
+              WHEN i.parcial = 2 THEN 'Parcial 2'
+              WHEN i.parcial = 3 THEN 'Parcial 3'
+              ELSE 'Actividad General'
+            END as parcial,
+            ins.nombre as instrumento,
+            ti.nombre_tipo as tipoInstrumento,
+            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
+            ISNULL(vce.valor_componente, 2) as valor_componente,
+            ISNULL(vce.componente, 'Actividad') as tipo_componente,
+            ag.fecha_entrega as fecha_entrega_raw,
+            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
+            'Grupo' as modalidad,
+            a.id_modalidad,
+            3 as prioridad
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
+          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
+          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
+          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
+          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
+          WHERE g.vchGrupo = @grupo_alumno 
+          AND i.vchPeriodo = @periodo_detectado
+          AND m.vchCuatrimestre = @cuatrimestre_alumno
+          AND a.id_modalidad = 3
+        ),
+        ActividadesSinDuplicados AS (
+          SELECT 
+            id_actividad,
+            titulo,
+            materia,
+            periodo,
+            parcial,
+            instrumento,
+            tipoInstrumento,
+            Docente,
+            valor_componente,
+            tipo_componente,
+            fecha_entrega_raw,
+            fecha_entrega,
+            modalidad,
+            id_modalidad,
+            ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
+          FROM ActividadesUnicas
+        )
+        SELECT *
+        FROM ActividadesSinDuplicados
+        WHERE rn = 1
+        ORDER BY periodo DESC, materia, parcial, fecha_entrega
+      `);
+
+    console.log(`📊 TODAS las actividades encontradas: ${todasLasActividades.recordset.length}`);
+
+    // 🔧 SEGUNDA CONSULTA: OBTENER **SOLO** LAS CALIFICACIONES EXISTENTES
+    const calificacionesExistentes = await pool.request()
+      .input('matricula', sql.VarChar, matricula)
+      .query(`
+        SELECT 
+          a.id_actividad,
+          ROUND(SUM(eca.calificacion) * 10.0 / i.valor_total, 2) as calificacion_obtenida,
+          COUNT(eca.id_criterio) as criterios_calificados
+        FROM tbl_evaluacion_criterioActividad eca
+        INNER JOIN tbl_actividad_alumno aa ON eca.id_actividad_alumno = aa.id_actividad_alumno
+        INNER JOIN tbl_actividades a ON aa.id_actividad = a.id_actividad
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        WHERE aa.vchMatricula = @matricula
+        GROUP BY a.id_actividad, i.valor_total
+      `);
+
+    console.log(`📊 Calificaciones existentes: ${calificacionesExistentes.recordset.length}`);
+
+    // 🔧 MAPEAR CALIFICACIONES A LAS ACTIVIDADES
+    const mapaCalificaciones = {};
+    calificacionesExistentes.recordset.forEach(cal => {
+      mapaCalificaciones[cal.id_actividad] = {
+        calificacion: cal.calificacion_obtenida,
+        criterios_calificados: cal.criterios_calificados,
+        estado: 'Calificada'
+      };
+    });
+
+    // 🔧 FUNCIÓN PARA EVALUAR SI UNA ACTIVIDAD ESTÁ VENCIDA
+    const evaluarEstadoActividad = (fecha_entrega_raw, tiene_calificacion) => {
+      if (tiene_calificacion) {
+        return {
+          estado: 'Calificada',
+          estado_para_promedio: 'Calificada',
+          incluir_en_promedio: true,
+          razon: 'Actividad calificada'
+        };
+      }
+
+      if (!fecha_entrega_raw) {
+        return {
+          estado: 'Pendiente',
+          estado_para_promedio: 'Sin fecha',
+          incluir_en_promedio: false,
+          razon: 'Sin fecha de entrega definida'
+        };
+      }
+
+      // Calcular si está vencida (usando la misma lógica que tienes en calcularEstadoDinamico)
+      const ahora = new Date();
+      const offsetMexico = -6; // UTC-6 para zona horaria de México
+      const ahoraLocal = new Date(ahora.getTime() + (offsetMexico * 60 * 60 * 1000));
+      
+      let fechaLimite;
+      try {
+        fechaLimite = new Date(fecha_entrega_raw);
+        if (isNaN(fechaLimite.getTime())) {
+          return {
+            estado: 'Pendiente',
+            estado_para_promedio: 'Error fecha',
+            incluir_en_promedio: false,
+            razon: 'Error en fecha de entrega'
+          };
+        }
+      } catch (error) {
+        return {
+          estado: 'Pendiente',
+          estado_para_promedio: 'Error fecha',
+          incluir_en_promedio: false,
+          razon: 'Error parseando fecha'
+        };
+      }
+
+      const diferenciaMilisegundos = fechaLimite.getTime() - ahoraLocal.getTime();
+      
+      if (diferenciaMilisegundos < 0) {
+        // ❌ YA VENCIÓ - CONTAR COMO 0 EN EL PROMEDIO
+        return {
+          estado: 'Vencida',
+          estado_para_promedio: 'Vencida (cuenta como 0)',
+          incluir_en_promedio: true,
+          calificacion_para_promedio: 0,
+          razon: 'Actividad vencida, cuenta como 0 en promedio'
+        };
+      } else {
+        // ✅ AÚN EN PLAZO - NO CONTAR EN EL PROMEDIO
+        return {
+          estado: 'Pendiente',
+          estado_para_promedio: 'En plazo (no cuenta)',
+          incluir_en_promedio: false,
+          razon: 'Actividad en plazo, no afecta promedio actual'
+        };
+      }
+    };
+
+    // 🔧 COMBINAR ACTIVIDADES CON CALIFICACIONES Y EVALUACIÓN DE VENCIMIENTO
+    const actividadesCompletas = todasLasActividades.recordset.map(actividad => {
+      const calificacion = mapaCalificaciones[actividad.id_actividad];
+      const evaluacion = evaluarEstadoActividad(actividad.fecha_entrega_raw, !!calificacion);
+      
+      return {
+        id_actividad: actividad.id_actividad,
+        titulo: actividad.titulo,
+        materia: actividad.materia,
+        periodo: actividad.periodo,
+        parcial: actividad.parcial,
+        instrumento: actividad.instrumento,
+        tipoInstrumento: actividad.tipoInstrumento,
+        Docente: actividad.Docente,
+        valor_componente: parseFloat(actividad.valor_componente) || 2,
+        tipo_componente: actividad.tipo_componente || 'Actividad',
+        fecha_entrega: actividad.fecha_entrega,
+        fecha_entrega_raw: actividad.fecha_entrega_raw,
+        modalidad: actividad.modalidad,
+        criterios_calificados: calificacion ? calificacion.criterios_calificados : 0,
+        
+        // ✅ LÓGICA INTELIGENTE PARA CALIFICACIONES
+        calificacion: calificacion ? calificacion.calificacion : (evaluacion.calificacion_para_promedio || null),
+        estado: evaluacion.estado,
+        estado_para_promedio: evaluacion.estado_para_promedio,
+        incluir_en_promedio: evaluacion.incluir_en_promedio,
+        razon_inclusion: evaluacion.razon,
+        
+        contribucion_obtenida: calificacion ? (calificacion.calificacion * actividad.valor_componente / 10) : 0
+      };
+    });
+
+    console.log(`📊 Actividades completas procesadas: ${actividadesCompletas.length}`);
+
+    if (actividadesCompletas.length === 0) {
+      return res.json([]);
+    }
+
+    // 🔧 PROCESAMIENTO: AGRUPAR Y CALCULAR PROMEDIOS PONDERADOS INTELIGENTES
+    const periodosProcesados = {};
+    
+    actividadesCompletas.forEach(actividad => {
+      // Inicializar período
+      if (!periodosProcesados[actividad.periodo]) {
+        periodosProcesados[actividad.periodo] = {
+          periodo: actividad.periodo,
+          materias: {},
+          promedio_cuatrimestre: 0
+        };
+      }
+      
+      // Inicializar materia
+      if (!periodosProcesados[actividad.periodo].materias[actividad.materia]) {
+        periodosProcesados[actividad.periodo].materias[actividad.materia] = {
+          nombre: actividad.materia,
+          docente: actividad.Docente || 'Docente Asignado',
+          grupo: 'Grupo',
+          creditos: 5,
+          estado: 'En curso',
+          parciales: {
+            'Parcial 1': { actividades: [], calificacion_parcial: 0, total_ponderacion: 0, tiene_calificaciones: false },
+            'Parcial 2': { actividades: [], calificacion_parcial: 0, total_ponderacion: 0, tiene_calificaciones: false },
+            'Parcial 3': { actividades: [], calificacion_parcial: 0, total_ponderacion: 0, tiene_calificaciones: false }
+          },
+          promedio_materia: 0,
+          calificacion_final_cuatrimestre: 0,
+          parciales_con_calificaciones: 0
+        };
+      }
+      
+      // Agregar actividad al parcial correspondiente
+      const materia = periodosProcesados[actividad.periodo].materias[actividad.materia];
+      const parcial = materia.parciales[actividad.parcial];
+      
+      if (parcial) {
+        parcial.actividades.push({
+          id_actividad: actividad.id_actividad,
+          titulo: actividad.titulo,
+          calificacion: actividad.calificacion,
+          fecha_entrega: actividad.fecha_entrega,
+          instrumento: actividad.instrumento,
+          tipoInstrumento: actividad.tipoInstrumento,
+          estado: actividad.estado,
+          estado_para_promedio: actividad.estado_para_promedio,
+          incluir_en_promedio: actividad.incluir_en_promedio,
+          razon_inclusion: actividad.razon_inclusion,
+          modalidad: actividad.modalidad,
+          criterios_calificados: actividad.criterios_calificados || 0,
+          valor_componente: parseFloat(actividad.valor_componente) || 2,
+          tipo_componente: actividad.tipo_componente || 'Actividad',
+          contribucion_obtenida: actividad.contribucion_obtenida || 0
+        });
+      }
+    });
+
+    // ✅ CALCULAR PROMEDIOS PONDERADOS INTELIGENTES (CALIFICADAS + VENCIDAS)
+    Object.values(periodosProcesados).forEach(periodo => {
+      Object.values(periodo.materias).forEach(materia => {
+        let sumaPromediosParciales = 0;
+        let parcialesConCalificaciones = 0;
+        
+        // Calcular promedio ponderado de cada parcial
+        Object.entries(materia.parciales).forEach(([nombreParcial, parcialData]) => {
+          if (parcialData.actividades.length > 0) {
+            // ✅ CÁLCULO INTELIGENTE: CALIFICADAS + VENCIDAS (como 0)
+            let sumaCalificacionesPonderadas = 0;
+            let sumaPonderaciones = 0;
+            let totalActividades = parcialData.actividades.length;
+            let actividadesIncluidas = 0;
+            let actividadesCalificadas = 0;
+            let actividadesVencidas = 0;
+            let actividadesEnPlazo = 0;
+            
+            parcialData.actividades.forEach(actividad => {
+              // ✅ INCLUIR SI: Está calificada O está vencida
+              if (actividad.incluir_en_promedio) {
+                const calificacion = actividad.calificacion || 0; // Vencidas = 0
+                const ponderacion = actividad.valor_componente;
+                
+                sumaCalificacionesPonderadas += (calificacion * ponderacion);
+                sumaPonderaciones += ponderacion;
+                actividadesIncluidas++;
+                
+                if (actividad.estado === 'Calificada') {
+                  actividadesCalificadas++;
+                  console.log(`📊 INCLUIDA (Calificada) - ${actividad.titulo}: Cal=${calificacion}, Pond=${ponderacion}`);
+                } else if (actividad.estado === 'Vencida') {
+                  actividadesVencidas++;
+                  console.log(`❌ INCLUIDA (Vencida=0) - ${actividad.titulo}: Cal=0, Pond=${ponderacion}`);
+                }
+              } else {
+                actividadesEnPlazo++;
+                console.log(`⏳ EXCLUIDA (En plazo) - ${actividad.titulo}: ${actividad.razon_inclusion}`);
+              }
+            });
+            
+            // ✅ PROMEDIO PONDERADO DEL PARCIAL: CALIFICADAS + VENCIDAS
+            if (actividadesIncluidas > 0) {
+              parcialData.calificacion_parcial = sumaPonderaciones > 0 
+                ? (sumaCalificacionesPonderadas / sumaPonderaciones)
+                : 0;
+              parcialData.tiene_calificaciones = true;
+              parcialesConCalificaciones++;
+              sumaPromediosParciales += parcialData.calificacion_parcial;
+            } else {
+              parcialData.calificacion_parcial = 0;
+              parcialData.tiene_calificaciones = false;
+            }
+            
+            parcialData.total_ponderacion = sumaPonderaciones;
+            
+            console.log(`📋 ${nombreParcial}: ${sumaCalificacionesPonderadas.toFixed(2)} / ${sumaPonderaciones} = ${parcialData.calificacion_parcial.toFixed(2)}`);
+            console.log(`📋 ${nombreParcial}: Total=${totalActividades}, Calificadas=${actividadesCalificadas}, Vencidas=${actividadesVencidas}, En plazo=${actividadesEnPlazo}`);
+          } else {
+            parcialData.calificacion_parcial = 0;
+            parcialData.total_ponderacion = 0;
+            parcialData.tiene_calificaciones = false;
+          }
+        });
+        
+        // ✅ PROMEDIO DE MATERIA: SOLO PARCIALES CON ACTIVIDADES EVALUABLES
+        materia.parciales_con_calificaciones = parcialesConCalificaciones;
+        
+        if (parcialesConCalificaciones > 0) {
+          materia.calificacion_final_cuatrimestre = sumaPromediosParciales / parcialesConCalificaciones;
+        } else {
+          materia.calificacion_final_cuatrimestre = 0;
+        }
+        
+        materia.promedio_materia = materia.calificacion_final_cuatrimestre;
+        materia.calificacion = materia.calificacion_final_cuatrimestre;
+        
+        // ✅ DETERMINAR ESTADO INTELIGENTE DE LA MATERIA
+        if (parcialesConCalificaciones === 3) {
+          // Todos los parciales evaluados
+          materia.estado = materia.calificacion_final_cuatrimestre >= 6 ? 'Aprobada' : 'Reprobada';
+        } else if (parcialesConCalificaciones > 0) {
+          // Algunos parciales evaluados
+          materia.estado = 'En curso';
+        } else {
+          // Ningún parcial evaluado
+          materia.estado = 'En curso';
+        }
+        
+        console.log(`🎓 ${materia.nombre}: Parciales evaluados = ${parcialesConCalificaciones}/3, Promedio = ${materia.calificacion_final_cuatrimestre.toFixed(2)} (${materia.estado})`);
+      });
+      
+      // ✅ PROMEDIO DEL CUATRIMESTRE
+      const materiasArray = Object.values(periodo.materias);
+      const materiasConCalif = materiasArray.filter(m => m.calificacion_final_cuatrimestre > 0);
+      
+      if (materiasConCalif.length > 0) {
+        const sumaCalificacionesMaterias = materiasConCalif.reduce((sum, mat) => sum + mat.calificacion_final_cuatrimestre, 0);
+        periodo.promedio_cuatrimestre = sumaCalificacionesMaterias / materiasConCalif.length;
+      } else {
+        periodo.promedio_cuatrimestre = 0;
+      }
+      
+      periodo.promedio = periodo.promedio_cuatrimestre;
+      periodo.materias = materiasArray;
+      
+      // 🆕 AGREGAR INFORMACIÓN DE PERÍODO AUTOMÁTICO
+      if (periodo.periodo === periodoInfo.periodo) {
+        periodo.periodo_info = {
+          detectado_automaticamente: periodoInfo.automatico,
+          periodo_registrado: periodoInfo.periodo_registrado,
+          periodo_detectado: periodoInfo.periodo,
+          razon: periodoInfo.razon,
+          timestamp: periodoInfo.timestamp
+        };
+      }
+    });
+
+    const calificacionesArray = Object.values(periodosProcesados);
+    calificacionesArray.sort((a, b) => b.periodo.localeCompare(a.periodo));
+
+    console.log(`🎓 === FIN CALIFICACIONES POR PARCIALES (LÓGICA INTELIGENTE VENCIDAS) ===`);
+
+    res.json(calificacionesArray);
+
+  } catch (error) {
+    console.error('❌ Error calificaciones por parciales:', error);
+    res.status(500).json({ 
+      mensaje: 'Error en el servidor al obtener calificaciones por parciales',
+      error: error.message 
+    });
+  }
+};
+
 // ===============================================
 // FUNCIÓN SIN CAMBIOS: cambiarContrasena
 // ===============================================
@@ -2192,5 +2689,6 @@ module.exports = {
   calcularEstadoDinamico,
   probarCalculoEstado,
   verificarEstadoActividad,
-  probarConFechaReal
+  probarConFechaReal,
+  obtenerCalificacionesHistoricasPorParciales
 };

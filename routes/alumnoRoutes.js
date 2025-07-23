@@ -8,7 +8,8 @@ const {
   obtenerCalificacionesHistoricas, 
   obtenerDetalleActividad,
   obtenerActividadesEntregadas,    
-  obtenerActividadEntregada
+  obtenerActividadEntregada,
+  obtenerCalificacionesHistoricasPorParciales
 } = require('../controllers/alumnoController');
 
 // Obtener datos del alumno
@@ -32,4 +33,6 @@ router.get('/actividades-entregadas/:matricula', obtenerActividadesEntregadas);
 // Obtener detalle de actividad entregada/calificada
 router.get('/actividad-entregada/:matricula/:idActividad', obtenerActividadEntregada);
 
+// Obtener calificaciones históricas por parciales
+router.get('/calificaciones-parciales/:matricula', obtenerCalificacionesHistoricasPorParciales);
 module.exports = router;

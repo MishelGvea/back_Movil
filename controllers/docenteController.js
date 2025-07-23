@@ -1498,17 +1498,19 @@ const crearActividadCompletaConComponente = async (req, res) => {
         const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
 
         // 🎯 Obtener alumnos del grupo y asignarlos con estado PENDIENTE
-        const alumnosResult = await transaction.request()
-          .input('idGrupo', sql.Int, idGrupo)
-          .input('cuatrimestre', sql.VarChar, vchCuatrimestre)
-          .input('periodo', sql.VarChar, Periodo)
-          .query(`
-            SELECT vchMatricula
-            FROM tblAlumnos
-            WHERE chvGrupo = @idGrupo
-              AND vchClvCuatri = @cuatrimestre
-              AND vchPeriodo = @periodo
-          `);
+        // 🎯 CONSULTA CORREGIDA:
+const alumnosResult = await transaction
+  .request()
+  .input("claveGrupo", sql.VarChar, claveGrupo)  // ✅ SOLUCIÓN: claveGrupo como VARCHAR
+  .input("cuatrimestre", sql.VarChar, vchCuatrimestre)
+  .input("periodo", sql.VarChar, Periodo)
+.query(`
+  SELECT vchMatricula, vchNombre, vchAPaterno
+  FROM tblAlumnos
+  WHERE chvGrupo = @claveGrupo
+    AND vchClvCuatri = @cuatrimestre
+    AND vchPeriodo = @periodo
+`)
 
         // 🎯 ASIGNAR CADA ALUMNO CON ESTADO INICIAL = PENDIENTE
         for (const alumno of alumnosResult.recordset) {
@@ -1770,13 +1772,7 @@ const crearActividad = async (req, res) => {
 
     // Insertar actividad por grupo y asignar alumnos con estados
     for (const claveGrupo of grupos) {
-      const grupoQuery = await pool.request()
-        .input('clave', sql.VarChar, claveGrupo)
-        .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
-
-      if (grupoQuery.recordset.length === 0) continue;
-
-      const idGrupo = grupoQuery.recordset[0].id_grupo;
+      
 
       // Insertar en tbl_actividad_grupo
       await transaction.request()
