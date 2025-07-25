@@ -694,7 +694,7 @@ const obtenerDatosAlumno = async (req, res) => {
           vchNomMateria as nombreMateria,
           Docente,
           TipoAcceso,
-          'Grupo' as Grupo
+          'Grupo'
         FROM MateriasSinDuplicados
         WHERE rn = 1
         ORDER BY vchNomMateria
@@ -705,7 +705,7 @@ const obtenerDatosAlumno = async (req, res) => {
     // PASO 3: Formatear materias
     const materias = materiasResult.recordset.map(m => ({
       nombre: m.nombreMateria,
-      grupo: m.Grupo,
+      grupo: alumnoData.grupo,
       profesor: m.Docente,
       icono: m.nombreMateria.charAt(0),
       tipoAcceso: m.TipoAcceso
