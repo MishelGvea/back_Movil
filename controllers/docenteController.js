@@ -1532,89 +1532,157 @@ const alumnosResult = await transaction
       console.log('👥 Procesando equipos...');
       
       for (const [claveGrupo, datosGrupo] of Object.entries(equiposPorGrupo)) {
-        const grupoQuery = await pool.request()
-          .input('clave', sql.VarChar, claveGrupo)
-          .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
+    const grupoQuery = await pool.request()
+      .input('clave', sql.VarChar, claveGrupo)
+      .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
 
-        if (grupoQuery.recordset.length === 0) continue;
-        const idGrupo = grupoQuery.recordset[0].id_grupo;
+    if (grupoQuery.recordset.length === 0) continue;
+    const idGrupo = grupoQuery.recordset[0].id_grupo;
 
-        let equiposParaAsignar = [];
+    let equiposParaAsignar = [];
+    
+    // 🔧 CASO 1: Usar equipos de actividad anterior - CORREGIDO
+    if (datosGrupo.tipoSeleccion === 'actividad' && datosGrupo.idActividadAnterior) {
+      console.log(`📋 Usando equipos de actividad anterior: ${datosGrupo.idActividadAnterior} para grupo ${claveGrupo}`);
+      
+      // ✅ OBTENER LOS EQUIPOS EXISTENTES DE LA ACTIVIDAD ANTERIOR
+      const equiposAnteriores = await pool.request()
+        .input('idActividadAnterior', sql.Int, datosGrupo.idActividadAnterior)
+        .input('idGrupo', sql.Int, idGrupo) // 🆕 AGREGAR FILTRO POR GRUPO
+        .query(`
+          SELECT DISTINCT ae.id_equipo
+          FROM tbl_actividad_equipo ae
+          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+          WHERE ae.id_actividad = @idActividadAnterior
+            AND e.id_grupo = @idGrupo
+        `);
+
+      // ✅ VERIFICAR QUE SE ENCONTRARON EQUIPOS
+      if (equiposAnteriores.recordset.length === 0) {
+        console.error(`❌ No se encontraron equipos de la actividad ${datosGrupo.idActividadAnterior} para el grupo ${claveGrupo}`);
+        await transaction.rollback();
+        return res.status(400).json({ 
+          error: `No se encontraron equipos de la actividad anterior para el grupo ${claveGrupo}`,
+          grupoProblema: claveGrupo,
+          idActividadAnterior: datosGrupo.idActividadAnterior
+        });
+      }
+
+      equiposParaAsignar = equiposAnteriores.recordset.map(e => e.id_equipo);
+      console.log(`✅ Encontrados ${equiposParaAsignar.length} equipos de actividad anterior para grupo ${claveGrupo}`);
+
+    // 🔧 CASO 2: Crear equipos nuevos - MEJORADO
+    } else if ((datosGrupo.tipoSeleccion === 'aleatorio' || datosGrupo.tipoSeleccion === 'manual') && datosGrupo.equiposNuevos) {
+      console.log(`📋 Creando ${datosGrupo.equiposNuevos.length} equipos nuevos para grupo ${claveGrupo}`);
+      
+      for (const equipoNuevo of datosGrupo.equiposNuevos) {
+        // 🔧 VALIDAR QUE EL EQUIPO TIENE INTEGRANTES
+        if (!equipoNuevo.integrantes || equipoNuevo.integrantes.length === 0) {
+          console.error(`❌ Equipo "${equipoNuevo.nombre}" no tiene integrantes`);
+          continue;
+        }
+
+        // 🔧 PASO 1: Crear equipo con nombre único
+        const nombreEquipoUnico = `${equipoNuevo.nombre}_${Date.now()}`;
         
-        // 🔧 CASO 1: Usar equipos de actividad anterior
-        if (datosGrupo.tipoSeleccion === 'actividad' && datosGrupo.idActividadAnterior) {
-          console.log(`📋 Usando equipos de actividad anterior: ${datosGrupo.idActividadAnterior}`);
-          
-          const equiposAnteriores = await pool.request()
-            .input('idActividadAnterior', sql.Int, datosGrupo.idActividadAnterior)
-            .query(`
-              SELECT ae.id_equipo
-              FROM tbl_actividad_equipo ae
-              WHERE ae.id_actividad = @idActividadAnterior
-            `);
+        await transaction.request()
+          .input('idGrupo', sql.Int, idGrupo)
+          .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
+          .query(`
+            INSERT INTO tbl_equipos (id_grupo, nombre_equipo)
+            VALUES (@idGrupo, @nombreEquipo)
+          `);
 
-          equiposParaAsignar = equiposAnteriores.recordset.map(e => e.id_equipo);
-          console.log(`✅ Encontrados ${equiposParaAsignar.length} equipos de actividad anterior`);
+        // 🔧 PASO 2: Obtener ID del equipo recién creado
+        const equipoRecienCreado = await transaction.request()
+          .input('idGrupo', sql.Int, idGrupo)
+          .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
+          .query(`
+            SELECT TOP 1 id_equipo 
+            FROM tbl_equipos 
+            WHERE id_grupo = @idGrupo 
+              AND nombre_equipo = @nombreEquipo 
+            ORDER BY id_equipo DESC
+          `);
 
-        // 🔧 CASO 2: Crear equipos nuevos
-        } else if ((datosGrupo.tipoSeleccion === 'aleatorio' || datosGrupo.tipoSeleccion === 'manual') && datosGrupo.equiposNuevos) {
-          console.log(`📋 Creando ${datosGrupo.equiposNuevos.length} equipos nuevos`);
-          
-          for (const equipoNuevo of datosGrupo.equiposNuevos) {
-            // 🔧 PASO 1: Crear equipo
+        if (equipoRecienCreado.recordset.length === 0) {
+          console.error(`❌ No se pudo crear el equipo "${equipoNuevo.nombre}"`);
+          continue;
+        }
+
+        const idEquipoCreado = equipoRecienCreado.recordset[0].id_equipo;
+
+        // 🔧 PASO 3: Asignar integrantes al equipo
+        for (const integrante of equipoNuevo.integrantes) {
+          // ✅ VALIDAR QUE LA MATRÍCULA EXISTE
+          if (!integrante.vchMatricula) {
+            console.error(`❌ Integrante sin matrícula:`, integrante);
+            continue;
+          }
+
+          try {
             await transaction.request()
-              .input('idGrupo', sql.Int, idGrupo)
-              .input('nombreEquipo', sql.NVarChar, equipoNuevo.nombre)
+              .input('idEquipo', sql.Int, idEquipoCreado)
+              .input('matricula', sql.VarChar, integrante.vchMatricula)
               .query(`
-                INSERT INTO tbl_equipos (id_grupo, nombre_equipo)
-                VALUES (@idGrupo, @nombreEquipo)
+                INSERT INTO tbl_equipo_alumno (id_equipo, vchMatricula)
+                VALUES (@idEquipo, @matricula)
               `);
-
-            // 🔧 PASO 2: Obtener ID del equipo recién creado
-            const equipoRecienCreado = await transaction.request()
-              .input('idGrupo', sql.Int, idGrupo)
-              .input('nombreEquipo', sql.NVarChar, equipoNuevo.nombre)
-              .query(`
-                SELECT TOP 1 id_equipo 
-                FROM tbl_equipos 
-                WHERE id_grupo = @idGrupo 
-                  AND nombre_equipo = @nombreEquipo 
-                ORDER BY id_equipo DESC
-              `);
-
-            const idEquipoCreado = equipoRecienCreado.recordset[0].id_equipo;
-
-            // 🔧 PASO 3: Asignar integrantes al equipo en tabla separada
-            for (const integrante of equipoNuevo.integrantes) {
-              await transaction.request()
-                .input('idEquipo', sql.Int, idEquipoCreado)
-                .input('matricula', sql.VarChar, integrante.vchMatricula)
-                .query(`
-                  INSERT INTO tbl_equipo_alumno (id_equipo, vchMatricula)
-                  VALUES (@idEquipo, @matricula)
-                `);
-            }
-
-            equiposParaAsignar.push(idEquipoCreado);
-            console.log(`✅ Equipo "${equipoNuevo.nombre}" creado con ${equipoNuevo.integrantes.length} integrantes`);
+          } catch (integranteError) {
+            console.error(`❌ Error al asignar integrante ${integrante.vchMatricula}:`, integranteError.message);
+            // Continuar con los demás integrantes
           }
         }
 
-        // 🎯 ASIGNAR EQUIPOS A LA ACTIVIDAD CON ESTADO INICIAL = PENDIENTE
-        for (const idEquipo of equiposParaAsignar) {
-          await transaction.request()
-            .input('idActividad', sql.Int, idActividad)
-            .input('idEquipo', sql.Int, idEquipo)
-            .input('idEstado', sql.Int, 1) // 🎯 1 = PENDIENTE
-            .query(`
-              INSERT INTO tbl_actividad_equipo (id_actividad, id_equipo, id_estado)
-              VALUES (@idActividad, @idEquipo, @idEstado)
-            `);
+        equiposParaAsignar.push(idEquipoCreado);
+        console.log(`✅ Equipo "${equipoNuevo.nombre}" creado con ${equipoNuevo.integrantes.length} integrantes (ID: ${idEquipoCreado})`);
+      }
+    } else {
+      console.log(`⚠️ Grupo ${claveGrupo}: No se configuraron equipos o tipo de selección inválido`);
+      // Continuar sin equipos para este grupo
+    }
+
+    // 🎯 ASIGNAR EQUIPOS A LA ACTIVIDAD - MEJORADO CON VALIDACIONES
+    console.log(`🎯 Asignando ${equiposParaAsignar.length} equipos a la actividad para grupo ${claveGrupo}`);
+
+    for (const idEquipo of equiposParaAsignar) {
+      try {
+        // ✅ VERIFICAR QUE EL EQUIPO NO ESTÉ YA ASIGNADO A ESTA ACTIVIDAD
+        const yaAsignado = await transaction.request()
+          .input('idActividad', sql.Int, idActividad)
+          .input('idEquipo', sql.Int, idEquipo)
+          .query(`
+            SELECT COUNT(*) as existe
+            FROM tbl_actividad_equipo
+            WHERE id_actividad = @idActividad AND id_equipo = @idEquipo
+          `);
+
+        if (yaAsignado.recordset[0].existe > 0) {
+          console.log(`⚠️ Equipo ${idEquipo} ya está asignado a esta actividad, saltando...`);
+          continue;
         }
 
-        console.log(`✅ Asignados ${equiposParaAsignar.length} equipos del grupo ${claveGrupo}`);
+        // ✅ ASIGNAR EQUIPO A LA ACTIVIDAD
+        await transaction.request()
+          .input('idActividad', sql.Int, idActividad)
+          .input('idEquipo', sql.Int, idEquipo)
+          .input('idEstado', sql.Int, 1) // 🎯 1 = PENDIENTE
+          .query(`
+            INSERT INTO tbl_actividad_equipo (id_actividad, id_equipo, id_estado)
+            VALUES (@idActividad, @idEquipo, @idEstado)
+          `);
+
+        console.log(`✅ Equipo ${idEquipo} asignado correctamente`);
+
+      } catch (equipoError) {
+        console.error(`❌ Error al asignar equipo ${idEquipo}:`, equipoError.message);
+        // Continuar con los demás equipos
       }
     }
+
+    console.log(`✅ Procesamiento completado para grupo ${claveGrupo}: ${equiposParaAsignar.length} equipos asignados`);
+  }
+}
 
     // ===============================================
     // 🔍 VERIFICACIÓN INMEDIATA EN BD
@@ -2038,12 +2106,15 @@ const obtenerListasCotejo = async (req, res) => {
 };
 
 // 🔧 FUNCIÓN OPTIMIZADA: obtenerActividadesPorGrupo - CON SISTEMA DE ESTADOS V2
+// 🔧 FUNCIÓN OPTIMIZADA: obtenerActividadesPorGrupo - CON CONTEO CORRECTO POR GRUPO
 const obtenerActividadesPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
   const { parcial, modalidad } = req.query;
 
   try {
     const pool = await sql.connect(config);
+    
+    console.log(`📊 Cargando actividades para grupo específico: ${idGrupo}`);
     
     let whereConditions = `
       WHERE i.vchClvTrabajador = @claveDocente
@@ -2077,73 +2148,151 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         g.vchGrupo,
         vce.componente as nombre_componente,
         
-        -- 🎯 USAR ESTADOS DIRECTAMENTE DE LAS TABLAS
+        -- 🎯 CONTEO CORRECTO: Solo del grupo específico
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            -- Modalidad individual: contar por estados
-            (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad)
+            -- Modalidad individual: contar alumnos solo de este grupo
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+             WHERE aa.id_actividad = a.id_actividad 
+               AND al.chvGrupo = @idGrupo)
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            -- Modalidad equipo: contar equipos
-            (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad)
+            -- 🔧 Modalidad equipo: contar SOLO equipos de este grupo
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND e.id_grupo = @idGrupo)
           ELSE 0
         END AS totalEntregas,
         
-        -- 📊 ESTADÍSTICAS USANDO LOS NUEVOS ESTADOS
+        -- 📊 ESTADÍSTICAS FILTRADAS POR GRUPO
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            -- Individual: alumnos PENDIENTES (estado = 1)
-            (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 1)
+            -- Individual: alumnos PENDIENTES de este grupo
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+             WHERE aa.id_actividad = a.id_actividad 
+               AND aa.id_estado = 1 
+               AND al.chvGrupo = @idGrupo)
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            -- Equipo: equipos PENDIENTES (estado = 1)
-            (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 1)
+            -- 🔧 Equipo: equipos PENDIENTES de este grupo
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND ae.id_estado = 1 
+               AND e.id_grupo = @idGrupo)
           ELSE 0
         END AS alumnosPendientes,
         
-        -- ✅ ENTREGADOS A TIEMPO (estado = 2)
+        -- ✅ ENTREGADOS A TIEMPO (estado = 2) - FILTRADO POR GRUPO
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 2)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+             WHERE aa.id_actividad = a.id_actividad 
+               AND aa.id_estado = 2 
+               AND al.chvGrupo = @idGrupo)
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 2)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND ae.id_estado = 2 
+               AND e.id_grupo = @idGrupo)
           ELSE 0
         END AS entregadosATiempo,
         
-        -- ❌ NO ENTREGADOS (estado = 3)
+        -- ❌ NO ENTREGADOS (estado = 3) - FILTRADO POR GRUPO
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 3)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+             WHERE aa.id_actividad = a.id_actividad 
+               AND aa.id_estado = 3 
+               AND al.chvGrupo = @idGrupo)
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 3)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND ae.id_estado = 3 
+               AND e.id_grupo = @idGrupo)
           ELSE 0
         END AS noEntregados,
         
-        -- 🕐 ENTREGADOS TARDE (estado = 4)
+        -- 🕐 ENTREGADOS TARDE (estado = 4) - FILTRADO POR GRUPO
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 4)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_alumno aa 
+             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+             WHERE aa.id_actividad = a.id_actividad 
+               AND aa.id_estado = 4 
+               AND al.chvGrupo = @idGrupo)
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 4)
+            (SELECT COUNT(*) 
+             FROM tbl_actividad_equipo ae 
+             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+             WHERE ae.id_actividad = a.id_actividad 
+               AND ae.id_estado = 4 
+               AND e.id_grupo = @idGrupo)
           ELSE 0
         END AS entregadosTarde,
         
-        -- 🎯 ESTADO GENERAL DE LA ACTIVIDAD (calculado)
+        -- 🎯 ESTADO GENERAL DE LA ACTIVIDAD (calculado para este grupo)
         CASE 
           -- Si ya pasó la fecha de entrega
           WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 
             CASE 
-              WHEN (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado IN (3)) > 0 
-                OR (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado IN (3)) > 0
+              WHEN (SELECT COUNT(*) 
+                    FROM tbl_actividad_alumno aa 
+                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                    WHERE aa.id_actividad = a.id_actividad 
+                      AND aa.id_estado IN (3) 
+                      AND al.chvGrupo = @idGrupo) > 0 
+                OR (SELECT COUNT(*) 
+                    FROM tbl_actividad_equipo ae 
+                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                    WHERE ae.id_actividad = a.id_actividad 
+                      AND ae.id_estado IN (3) 
+                      AND e.id_grupo = @idGrupo) > 0
               THEN 'vencida'
-              WHEN (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 1) > 0 
-                OR (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 1) > 0
+              WHEN (SELECT COUNT(*) 
+                    FROM tbl_actividad_alumno aa 
+                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                    WHERE aa.id_actividad = a.id_actividad 
+                      AND aa.id_estado = 1 
+                      AND al.chvGrupo = @idGrupo) > 0 
+                OR (SELECT COUNT(*) 
+                    FROM tbl_actividad_equipo ae 
+                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                    WHERE ae.id_actividad = a.id_actividad 
+                      AND ae.id_estado = 1 
+                      AND e.id_grupo = @idGrupo) > 0
               THEN 'pendiente_vencida'
               ELSE 'completada'
             END
           -- Si aún hay tiempo
           ELSE 
             CASE 
-              WHEN (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 1) > 0 
-                OR (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 1) > 0
+              WHEN (SELECT COUNT(*) 
+                    FROM tbl_actividad_alumno aa 
+                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                    WHERE aa.id_actividad = a.id_actividad 
+                      AND aa.id_estado = 1 
+                      AND al.chvGrupo = @idGrupo) > 0 
+                OR (SELECT COUNT(*) 
+                    FROM tbl_actividad_equipo ae 
+                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                    WHERE ae.id_actividad = a.id_actividad 
+                      AND ae.id_estado = 1 
+                      AND e.id_grupo = @idGrupo) > 0
               THEN 'activa'
               ELSE 'completada'
             END
@@ -2152,22 +2301,48 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         -- ⏰ DÍAS RESTANTES
         DATEDIFF(day, GETDATE(), ag.fecha_entrega) AS diasRestantes,
         
-        -- 📈 PORCENTAJE DE COMPLETADO (basado en estados)
+        -- 📈 PORCENTAJE DE COMPLETADO (basado en estados del grupo)
         CASE 
           WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
             CASE 
-              WHEN (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad) > 0
+              WHEN (SELECT COUNT(*) 
+                    FROM tbl_actividad_alumno aa 
+                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                    WHERE aa.id_actividad = a.id_actividad 
+                      AND al.chvGrupo = @idGrupo) > 0
               THEN ROUND(
-                (CAST((SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado IN (2,4)) AS FLOAT) / 
-                 CAST((SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad) AS FLOAT)) * 100, 1)
+                (CAST((SELECT COUNT(*) 
+                       FROM tbl_actividad_alumno aa 
+                       INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                       WHERE aa.id_actividad = a.id_actividad 
+                         AND aa.id_estado IN (2,4) 
+                         AND al.chvGrupo = @idGrupo) AS FLOAT) / 
+                 CAST((SELECT COUNT(*) 
+                       FROM tbl_actividad_alumno aa 
+                       INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                       WHERE aa.id_actividad = a.id_actividad 
+                         AND al.chvGrupo = @idGrupo) AS FLOAT)) * 100, 1)
               ELSE 0
             END
           WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
             CASE 
-              WHEN (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad) > 0
+              WHEN (SELECT COUNT(*) 
+                    FROM tbl_actividad_equipo ae 
+                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                    WHERE ae.id_actividad = a.id_actividad 
+                      AND e.id_grupo = @idGrupo) > 0
               THEN ROUND(
-                (CAST((SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado IN (2,4)) AS FLOAT) / 
-                 CAST((SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad) AS FLOAT)) * 100, 1)
+                (CAST((SELECT COUNT(*) 
+                       FROM tbl_actividad_equipo ae 
+                       INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                       WHERE ae.id_actividad = a.id_actividad 
+                         AND ae.id_estado IN (2,4) 
+                         AND e.id_grupo = @idGrupo) AS FLOAT) / 
+                 CAST((SELECT COUNT(*) 
+                       FROM tbl_actividad_equipo ae 
+                       INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                       WHERE ae.id_actividad = a.id_actividad 
+                         AND e.id_grupo = @idGrupo) AS FLOAT)) * 100, 1)
               ELSE 0
             END
           ELSE 0
@@ -2182,7 +2357,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       ORDER BY i.parcial, a.numero_actividad DESC, a.fecha_creacion DESC
     `);
 
-    // 🎯 PROCESAR RESULTADOS CON ESTADOS REALES
+    // 🎯 PROCESAR RESULTADOS CON ESTADÍSTICAS FILTRADAS POR GRUPO
     const actividadesPorParcial = {};
     
     result.recordset.forEach(actividad => {
@@ -2202,7 +2377,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         };
       }
 
-      // ✅ USAR ESTADO REAL CALCULADO
+      // ✅ USAR ESTADO REAL CALCULADO PARA EL GRUPO
       const estado = actividad.estadoActividad;
       
       actividadesPorParcial[parcial].actividades.push({
@@ -2215,7 +2390,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         modalidad: (actividad.id_modalidad === 2) ? 'equipo' : 'individual',
         estado: estado,
         
-        // 📊 ESTADÍSTICAS DETALLADAS POR ESTADO
+        // 📊 ESTADÍSTICAS DETALLADAS FILTRADAS POR GRUPO
         estadisticasDetalladas: {
           pendientes: actividad.alumnosPendientes || 0,
           entregadosATiempo: actividad.entregadosATiempo || 0,
@@ -2243,7 +2418,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       if (estado === 'vencida' || estado === 'pendiente_vencida') actividadesPorParcial[parcial].estadisticas.vencidas++;
     });
 
-    // 🎯 ESTADÍSTICAS GLOBALES OPTIMIZADAS
+    // 🎯 ESTADÍSTICAS GLOBALES OPTIMIZADAS - FILTRADAS POR GRUPO
     const estadisticasGlobales = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -2252,12 +2427,22 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         WITH EstadisticasActividades AS (
           SELECT 
             a.id_actividad,
-            -- Sumar alumnos/equipos PENDIENTES (estado = 1)
+            -- 🔧 Sumar alumnos/equipos PENDIENTES solo del grupo específico
             CASE 
               WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 1)
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_alumno aa 
+                 INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                 WHERE aa.id_actividad = a.id_actividad 
+                   AND aa.id_estado = 1 
+                   AND al.chvGrupo = @idGrupo)
               ELSE 
-                (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 1)
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_equipo ae 
+                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                 WHERE ae.id_actividad = a.id_actividad 
+                   AND ae.id_estado = 1 
+                   AND e.id_grupo = @idGrupo)
             END AS pendientes,
             
             -- Verificar si ya venció
@@ -2272,10 +2457,18 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         )
         
         SELECT 
+          -- ✅ Actividades 100% sin pendientes del grupo
           SUM(CASE WHEN pendientes = 0 THEN 1 ELSE 0 END) as actividadesCompletas,
+          
+          -- 📝 Total de pendientes en todas las actividades del grupo
           SUM(pendientes) as totalPendientes,
+          
+          -- 🚨 Actividades vencidas con pendientes del grupo
           SUM(CASE WHEN yaVencio = 1 AND pendientes > 0 THEN 1 ELSE 0 END) as actividadesVencidas,
+          
+          -- 📊 Total de actividades del grupo
           COUNT(*) as totalActividades
+          
         FROM EstadisticasActividades
       `);
 
@@ -2292,6 +2485,9 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       .sort((a, b) => a - b)
       .map(parcial => actividadesPorParcial[parcial]);
 
+    console.log(`✅ Estadísticas calculadas para grupo ${idGrupo}:`, stats);
+    console.log(`📊 Parciales procesados: ${parciales.length}`);
+
     res.json({
       parciales,
       estadisticas: {
@@ -2302,7 +2498,8 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       },
       // 🎯 METADATOS CON EL NUEVO SISTEMA
       metadata: {
-        sistemaEstados: 'optimizado_v2',
+        grupoEspecifico: idGrupo,
+        sistemaEstados: 'optimizado_v2_por_grupo',
         usaTriggers: true,
         estadosDisponibles: {
           1: 'Pendiente',
@@ -2540,11 +2737,15 @@ const simularEquiposAleatorios = async (req, res) => {
 };
 
 // Obtener actividades anteriores con equipos por grupo
+// Obtener actividades anteriores con equipos por grupo - CORREGIDO
 const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
 
   try {
     const pool = await sql.connect(config);
+    
+    console.log(`🔍 Obteniendo actividades con equipos para grupo específico: ${idGrupo}`);
+    
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -2566,10 +2767,26 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
         WHERE i.vchClvTrabajador = @claveDocente
           AND i.vchClvMateria = @claveMateria
           AND ag.id_grupo = @idGrupo
+          AND e.id_grupo = @idGrupo  -- 🔧 FILTRO CRUCIAL: Solo equipos del grupo específico
           AND a.id_modalidad = 2
         GROUP BY a.id_actividad, a.titulo, a.numero_actividad, i.parcial
+        HAVING COUNT(ae.id_equipo) > 0  -- 🔧 Solo actividades que tengan equipos
         ORDER BY a.numero_actividad DESC
       `);
+
+    console.log(`✅ Actividades con equipos encontradas para grupo ${idGrupo}: ${result.recordset.length}`);
+    
+    // 🆕 DEBUG: Mostrar detalles de las actividades encontradas
+    if (result.recordset.length > 0) {
+      console.log('📋 Actividades con equipos del grupo:', result.recordset.map(act => ({
+        titulo: act.titulo,
+        numero: act.numero_actividad,
+        equipos: act.total_equipos,
+        nombres: act.nombres_equipos
+      })));
+    } else {
+      console.log(`⚠️ No se encontraron actividades con equipos para el grupo ${idGrupo}`);
+    }
 
     res.json(result.recordset);
   } catch (error) {
@@ -2680,12 +2897,17 @@ const obtenerCriteriosActividad = async (req, res) => {
 };
 
 // Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
+// Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
+// Obtener equipos para calificar - FILTRO CORREGIDO
 const obtenerEquiposParaCalificar = async (req, res) => {
   const { idActividad } = req.params;
+  const { idGrupo } = req.query; // 🔧 PARÁMETRO DEL GRUPO
 
   try {
     const pool = await sql.connect(config);
     
+    console.log(`🔍 Obteniendo equipos para calificar: Actividad=${idActividad}, Grupo=${idGrupo}`);
+
     // Primero obtener el valor total del instrumento y todos los criterios
     const instrumentoResult = await pool.request()
       .input('idActividad', sql.Int, idActividad)
@@ -2699,57 +2921,102 @@ const obtenerEquiposParaCalificar = async (req, res) => {
         WHERE a.id_actividad = @idActividad
         GROUP BY i.valor_total
       `);
-    
+
     const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
     const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
 
-    const result = await pool.request()
+    // 🔧 CONSULTA CORREGIDA - USAR ID NUMÉRICO EN LUGAR DE NOMBRE
+    const request = pool.request()
       .input('idActividad', sql.Int, idActividad)
       .input('valorTotal', sql.Float, valorTotal)
-      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
-      .query(`
-        SELECT 
-          ae.id_actividad_equipo,
-          e.id_equipo,
-          e.nombre_equipo,
-          ae.observacion,
-          ae.id_estado, -- 🆕 INCLUIR ESTADO
-          -- Integrantes del equipo
-          STUFF((
-            SELECT ', ' + al2.vchNombre + ' ' + ISNULL(al2.vchAPaterno, '')
-            FROM tbl_equipo_alumno ea2
-            INNER JOIN tblAlumnos al2 ON ea2.vchMatricula = al2.vchMatricula
-            WHERE ea2.id_equipo = e.id_equipo
-            FOR XML PATH('')
-          ), 1, 2, '') as integrantes,
-          (SELECT COUNT(*) FROM tbl_equipo_alumno ea3 WHERE ea3.id_equipo = e.id_equipo) as totalIntegrantes,
-          -- Verificar si ya está calificado
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ece 
-              WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
-            ) THEN 1 
-            ELSE 0 
-          END as yaCalificado,
-          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
-          (SELECT 
-             ROUND(SUM(CAST(ece2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
-           FROM tbl_evaluacion_criterioActividadEquipo ece2
-           WHERE ece2.id_actividad_equipo = ae.id_actividad_equipo
-          ) as calificacionTotal,
-          -- 🆕 ESTADO EN TEXTO
-          CASE 
-            WHEN ae.id_estado = 1 THEN 'Pendiente'
-            WHEN ae.id_estado = 2 THEN 'Entregado'
-            WHEN ae.id_estado = 3 THEN 'No Entregado'
-            WHEN ae.id_estado = 4 THEN 'Entregado Tarde'
-            ELSE 'Sin Estado'
-          END as estadoTexto
-        FROM tbl_actividad_equipo ae
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        WHERE ae.id_actividad = @idActividad
-        ORDER BY e.nombre_equipo
-      `);
+      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios);
+
+    let whereClause = 'WHERE ae.id_actividad = @idActividad';
+
+    // 🆕 FILTRO CORREGIDO: Usar g.id_grupo en lugar de g.vchGrupo
+    if (idGrupo) {
+      request.input('idGrupo', sql.Int, parseInt(idGrupo)); // 🔧 CONVERTIR A INT
+      whereClause += ' AND g.id_grupo = @idGrupo'; // 🔧 USAR ID NUMÉRICO
+      console.log(`🎯 Filtrando por ID de grupo numérico: ${idGrupo}`);
+    }
+
+    const result = await request.query(`
+      SELECT 
+        ae.id_actividad_equipo,
+        e.id_equipo,
+        e.nombre_equipo,
+        ae.observacion,
+        ae.id_estado,
+        g.vchGrupo, -- 🆕 INCLUIR GRUPO PARA VERIFICACIÓN
+        g.id_grupo, -- 🆕 INCLUIR ID PARA DEBUG
+        -- Integrantes del equipo
+        STUFF((
+          SELECT ', ' + al2.vchNombre + ' ' + ISNULL(al2.vchAPaterno, '')
+          FROM tbl_equipo_alumno ea2
+          INNER JOIN tblAlumnos al2 ON ea2.vchMatricula = al2.vchMatricula
+          WHERE ea2.id_equipo = e.id_equipo
+          FOR XML PATH('')
+        ), 1, 2, '') as integrantes,
+        (SELECT COUNT(*) FROM tbl_equipo_alumno ea3 WHERE ea3.id_equipo = e.id_equipo) as totalIntegrantes,
+        -- Verificar si ya está calificado
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ece 
+            WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
+          ) THEN 1 
+          ELSE 0 
+        END as yaCalificado,
+        -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
+        (SELECT 
+           ROUND(SUM(CAST(ece2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
+         FROM tbl_evaluacion_criterioActividadEquipo ece2
+         WHERE ece2.id_actividad_equipo = ae.id_actividad_equipo
+        ) as calificacionTotal,
+        -- 🆕 ESTADO EN TEXTO
+        CASE 
+          WHEN ae.id_estado = 1 THEN 'Pendiente'
+          WHEN ae.id_estado = 2 THEN 'Entregado'
+          WHEN ae.id_estado = 3 THEN 'No Entregado'
+          WHEN ae.id_estado = 4 THEN 'Entregado Tarde'
+          ELSE 'Sin Estado'
+        END as estadoTexto
+      FROM tbl_actividad_equipo ae
+      INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+      INNER JOIN tbl_grupos g ON e.id_grupo = g.id_grupo -- 🆕 JOIN CON GRUPOS
+      ${whereClause}
+      ORDER BY e.nombre_equipo
+    `);
+
+    console.log(`✅ Equipos encontrados para grupo ID ${idGrupo}: ${result.recordset.length}`);
+    
+    // 🆕 DEBUG: Mostrar detalles de los equipos encontrados
+    if (result.recordset.length > 0) {
+      console.log('📋 Equipos encontrados:', result.recordset.map(e => ({
+        nombre: e.nombre_equipo,
+        grupoNombre: e.vchGrupo,
+        grupoId: e.id_grupo
+      })));
+    } else {
+      console.log('⚠️ No se encontraron equipos. Verificando si existen equipos en la BD...');
+      
+      // 🔍 CONSULTA DE DEBUG PARA VER QUÉ EQUIPOS EXISTEN
+      const debugResult = await pool.request()
+        .input('idActividad', sql.Int, idActividad)
+        .query(`
+          SELECT 
+            e.id_equipo,
+            e.nombre_equipo,
+            g.id_grupo,
+            g.vchGrupo,
+            ae.id_actividad_equipo
+          FROM tbl_actividad_equipo ae
+          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+          INNER JOIN tbl_grupos g ON e.id_grupo = g.id_grupo
+          WHERE ae.id_actividad = @idActividad
+        `);
+      
+      console.log('🔍 TODOS los equipos de esta actividad:', debugResult.recordset);
+    }
 
     res.json(result.recordset);
   } catch (error) {
@@ -2757,7 +3024,6 @@ const obtenerEquiposParaCalificar = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 // Obtener alumnos para calificar (modalidad individual) - CÁLCULO COMPLETAMENTE CORREGIDO
 const obtenerAlumnosParaCalificar = async (req, res) => {
   const { idActividad } = req.params;
