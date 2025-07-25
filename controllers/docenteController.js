@@ -3635,6 +3635,221 @@ const obtenerEstadisticasGrupo = async (req, res) => {
   }
 };
 
+// Función 1: Obtener calificaciones individuales de integrantes de equipo
+const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
+  const { idActividadEquipo } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    console.log(`📊 Obteniendo calificaciones individuales para equipo ID: ${idActividadEquipo}`);
+
+    // Consulta principal: obtener datos de integrantes
+    const result = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT 
+          -- 👥 DATOS DEL EQUIPO
+          e.id_equipo,
+          e.nombre_equipo,
+          ae.observacion as observacion_equipo,
+          
+          -- 👤 DATOS DEL ALUMNO
+          ea.vchMatricula,
+          CONCAT(al.vchNombre, ' ', ISNULL(al.vchAPaterno, ''), ' ', ISNULL(al.vchAMaterno, '')) as nombreCompleto,
+          al.vchNombre,
+          al.vchAPaterno,
+          al.vchAMaterno,
+          
+          -- 📝 DATOS DE ACTIVIDAD INDIVIDUAL
+          aa.id_actividad_alumno,
+          aa.observacion as observacion_individual,
+          aa.id_estado as estado_individual,
+          
+          -- 📊 CALIFICACIÓN TOTAL INDIVIDUAL
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividad eca_check 
+              WHERE eca_check.id_actividad_alumno = aa.id_actividad_alumno
+            ) THEN 
+              (SELECT 
+                 ROUND(
+                   SUM(CAST(eca2.calificacion AS FLOAT)) / 
+                   (SELECT SUM(c.valor_maximo) FROM tbl_criterios c 
+                    INNER JOIN tbl_actividades a2 ON c.id_instrumento = a2.id_instrumento
+                    WHERE a2.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)) *
+                   (SELECT i.valor_total FROM tbl_actividades a3 
+                    INNER JOIN tbl_instrumento i ON a3.id_instrumento = i.id_instrumento
+                    WHERE a3.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo))
+                 , 1)
+               FROM tbl_evaluacion_criterioActividad eca2
+               WHERE eca2.id_actividad_alumno = aa.id_actividad_alumno
+              )
+            ELSE 0
+          END as calificacionTotalIndividual,
+          
+          -- 🎯 ESTADO EN TEXTO
+          CASE 
+            WHEN aa.id_estado = 1 THEN 'Pendiente'
+            WHEN aa.id_estado = 2 THEN 'Entregado'
+            WHEN aa.id_estado = 3 THEN 'No Entregado'
+            WHEN aa.id_estado = 4 THEN 'Entregado Tarde'
+            ELSE 'Sin Estado'
+          END as estadoTexto,
+          
+          -- ✅ VERIFICAR SI TIENE CALIFICACIONES
+          CASE 
+            WHEN EXISTS (
+              SELECT 1 FROM tbl_evaluacion_criterioActividad eca2 
+              WHERE eca2.id_actividad_alumno = aa.id_actividad_alumno
+            ) THEN 1 
+            ELSE 0 
+          END as tieneCalificacionIndividual
+
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+        INNER JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
+        INNER JOIN tblAlumnos al ON ea.vchMatricula = al.vchMatricula
+        LEFT JOIN tbl_actividad_alumno aa ON aa.vchMatricula = ea.vchMatricula 
+          AND aa.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)
+        WHERE ae.id_actividad_equipo = @idActividadEquipo
+        ORDER BY al.vchNombre, al.vchAPaterno
+      `);
+
+    // Consulta secundaria: obtener calificaciones detalladas por criterio
+    const calificacionesDetalladas = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT 
+          ea.vchMatricula,
+          eca.id_criterio,
+          eca.calificacion,
+          c.nombre as nombre_criterio,
+          c.valor_maximo
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+        INNER JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
+        INNER JOIN tbl_actividad_alumno aa ON aa.vchMatricula = ea.vchMatricula 
+          AND aa.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)
+        INNER JOIN tbl_evaluacion_criterioActividad eca ON aa.id_actividad_alumno = eca.id_actividad_alumno
+        INNER JOIN tbl_criterios c ON eca.id_criterio = c.id_criterio
+        WHERE ae.id_actividad_equipo = @idActividadEquipo
+        ORDER BY ea.vchMatricula, c.id_criterio
+      `);
+
+    // Obtener valor total del instrumento
+    const valorTotalResult = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT i.valor_total
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_actividades a ON ae.id_actividad = a.id_actividad
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        WHERE ae.id_actividad_equipo = @idActividadEquipo
+      `);
+
+    const valorTotal = valorTotalResult.recordset[0]?.valor_total || 10;
+
+    // 📊 ESTRUCTURAR DATOS POR INTEGRANTE
+    const integrantes = result.recordset.map(integrante => {
+      const calificacionesPorCriterio = calificacionesDetalladas.recordset
+        .filter(cal => cal.vchMatricula === integrante.vchMatricula)
+        .map(cal => ({
+          id_criterio: cal.id_criterio,
+          nombre_criterio: cal.nombre_criterio,
+          calificacion: cal.calificacion,
+          valor_maximo: cal.valor_maximo
+        }));
+
+      return {
+        ...integrante,
+        calificacionesPorCriterio,
+        porcentajeIndividual: integrante.calificacionTotalIndividual ? 
+          Math.round((integrante.calificacionTotalIndividual / valorTotal) * 100) : 0
+      };
+    });
+
+    // 🎯 CALCULAR ESTADÍSTICAS DEL EQUIPO
+    const integrantesConCalificacion = integrantes.filter(i => i.tieneCalificacionIndividual);
+    const estadisticasEquipo = {
+      totalIntegrantes: integrantes.length,
+      integrantesCalificados: integrantesConCalificacion.length,
+      integrantesSinCalificar: integrantes.length - integrantesConCalificacion.length,
+      promedioEquipo: integrantesConCalificacion.length > 0 ? 
+        parseFloat((integrantesConCalificacion.reduce((sum, i) => sum + (i.calificacionTotalIndividual || 0), 0) / integrantesConCalificacion.length).toFixed(2)) : 0,
+      calificacionMaxima: integrantesConCalificacion.length > 0 ? 
+        Math.max(...integrantesConCalificacion.map(i => i.calificacionTotalIndividual || 0)) : 0,
+      calificacionMinima: integrantesConCalificacion.length > 0 ? 
+        Math.min(...integrantesConCalificacion.map(i => i.calificacionTotalIndividual || 0)) : 0
+    };
+
+    console.log(`✅ Obtenidas calificaciones de ${integrantes.length} integrantes`);
+    console.log(`📊 Promedio del equipo: ${estadisticasEquipo.promedioEquipo}`);
+
+    // 🎯 RESPUESTA ESTRUCTURADA
+    res.json({
+      equipo: {
+        id_equipo: result.recordset[0]?.id_equipo,
+        nombre_equipo: result.recordset[0]?.nombre_equipo,
+        observacion_equipo: result.recordset[0]?.observacion_equipo
+      },
+      integrantes,
+      estadisticasEquipo,
+      metadata: {
+        totalIntegrantes: integrantes.length,
+        tieneCalificacionesIndividuales: integrantes.some(i => i.tieneCalificacionIndividual),
+        tieneCalificacionesVariadas: estadisticasEquipo.calificacionMaxima !== estadisticasEquipo.calificacionMinima,
+        valorTotalInstrumento: valorTotal
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error al obtener calificaciones de integrantes:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
+// Función 2: Comparativa equipo vs individuales (opcional, para análisis avanzado)
+const obtenerComparativaEquipoIndividual = async (req, res) => {
+  const { idActividadEquipo } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    console.log(`📊 Generando comparativa equipo vs individual para ID: ${idActividadEquipo}`);
+
+    // Obtener calificación general del equipo
+    const calificacionEquipoResult = await pool.request()
+      .input('idActividadEquipo', sql.Int, idActividadEquipo)
+      .query(`
+        SELECT 
+          e.nombre_equipo,
+          ISNULL(SUM(ecae.calificacion), 0) as calificacionTotalEquipo,
+          COUNT(ecae.id_criterio) as criteriosCalificados
+        FROM tbl_actividad_equipo ae
+        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+        LEFT JOIN tbl_evaluacion_criterioActividadEquipo ecae ON ae.id_actividad_equipo = ecae.id_actividad_equipo
+        WHERE ae.id_actividad_equipo = @idActividadEquipo
+        GROUP BY e.nombre_equipo
+      `);
+
+    const calificacionEquipo = calificacionEquipoResult.recordset[0] || {
+      nombre_equipo: 'Equipo',
+      calificacionTotalEquipo: 0,
+      criteriosCalificados: 0
+    };
+
+    res.json({
+      calificacionEquipo,
+      mensaje: 'Comparativa disponible'
+    });
+
+  } catch (error) {
+    console.error('❌ Error al generar comparativa:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
+
 // ===============================================
 // EXPORTS COMPLETOS ACTUALIZADOS Y CORREGIDOS
 // ===============================================
@@ -3693,6 +3908,8 @@ module.exports = {
   guardarObservacionEquipo,
   obtenerObservacionAlumno,
   obtenerObservacionEquipo,
+  obtenerComparativaEquipoIndividual,
+  obtenerCalificacionesIntegrantesEquipo,
 
   // Funciones de procedimientos almacenados
   obtenerConcentradoFinal,
