@@ -3248,7 +3248,8 @@ const guardarCalificacionesAlumno = async (req, res) => {
 };
 
 const guardarCalificacionesEquipo = async (req, res) => {
-  const { idActividadEquipo, idEquipo, calificaciones, observacion } = req.body; // 🆕 AGREGAR observacion
+  // 🔧 CORREGIDO: Recibir integrantesPersonalizados
+  const { idActividadEquipo, idEquipo, calificaciones, observacion, integrantesPersonalizados } = req.body;
 
   const transaction = new sql.Transaction();
 
@@ -3260,7 +3261,8 @@ const guardarCalificacionesEquipo = async (req, res) => {
     console.log('📋 idActividadEquipo:', idActividadEquipo);
     console.log('👥 idEquipo:', idEquipo);
     console.log('📊 Calificaciones:', calificaciones);
-    console.log('💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:', observacion); // 🆕 DEBUG LOG
+    console.log('💬 Observación:', observacion);
+    console.log('🎯 Integrantes personalizados:', integrantesPersonalizados); // 🆕 DEBUG
 
     // PASO 1: Eliminar calificaciones existentes del equipo
     await transaction.request()
@@ -3315,20 +3317,52 @@ const guardarCalificacionesEquipo = async (req, res) => {
         `);
     }
 
-    // 🆕 PASO 5: ACTUALIZAR ESTADO Y OBSERVACIÓN DEL EQUIPO
+    // PASO 5: Actualizar estado y observación del equipo
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
-      .input('observacion', sql.NVarChar, observacion || null) // 🆕 OBSERVACIÓN
+      .input('observacion', sql.NVarChar, observacion || null)
       .query(`
         UPDATE tbl_actividad_equipo 
         SET id_estado = @nuevoEstado, observacion = @observacion 
         WHERE id_actividad_equipo = @idActividadEquipo
       `);
 
-    // PASO 6: REPLICAR CALIFICACIONES A CADA INTEGRANTE
+    // 🔧 PASO 6.5: MAPEAR MATRÍCULAS TEMPORALES A REALES
+    console.log('🔧 Mapeando matrículas temporales a reales...');
+    const integrantesPersonalizadosConMatriculasReales = [];
+
+    if (integrantesPersonalizados && integrantesPersonalizados.length > 0) {
+      for (let i = 0; i < integrantes.length && i < integrantesPersonalizados.length; i++) {
+        const integranteReal = integrantes[i];
+        const integrantePersonalizado = integrantesPersonalizados[i];
+        
+        integrantesPersonalizadosConMatriculasReales.push({
+          vchMatricula: integranteReal.vchMatricula, // ← USAR MATRÍCULA REAL
+          tieneCalificacionPersonalizada: integrantePersonalizado.tieneCalificacionPersonalizada || false,
+          observacionesPersonalizadas: integrantePersonalizado.observacionesPersonalizadas || '',
+          criteriosPersonalizados: integrantePersonalizado.criteriosPersonalizados || {}
+        });
+        
+        console.log(`🔄 Mapeado: ${integrantePersonalizado.vchMatricula} → ${integranteReal.vchMatricula}`);
+      }
+    }
+
+    console.log('✅ Mapeo completado:', integrantesPersonalizadosConMatriculasReales);
+
+    // 🔧 PASO 6 CORREGIDO: PROCESAR CALIFICACIONES INDIVIDUALES O GRUPALES
     for (const integrante of integrantes) {
-      console.log(`📝 Replicando calificación para ${integrante.vchMatricula}`);
+      console.log(`📝 Procesando calificaciones para ${integrante.vchMatricula}`);
+
+      // 🎯 BUSCAR SI ESTE INTEGRANTE TIENE CALIFICACIONES PERSONALIZADAS (CORREGIDO)
+      const integrantePersonalizado = integrantesPersonalizadosConMatriculasReales?.find(
+        ip => ip.vchMatricula === integrante.vchMatricula
+      );
+
+      const tieneCalificacionPersonalizada = integrantePersonalizado?.tieneCalificacionPersonalizada || false;
+      const observacionPersonalizada = integrantePersonalizado?.observacionesPersonalizadas || observacion;
+
+      console.log(`🎯 ${integrante.vchMatricula} - Personalizada: ${tieneCalificacionPersonalizada}`);
 
       // Verificar si existe registro en tbl_actividad_alumno
       const actividadAlumnoResult = await transaction.request()
@@ -3347,8 +3381,8 @@ const guardarCalificacionesEquipo = async (req, res) => {
         await transaction.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
-          .input('estadoInicial', sql.Int, 2) // 🆕 CREAR CON ESTADO "ENTREGADO"
-          .input('observacion', sql.NVarChar, observacion || null) // 🆕 REPLICAR OBSERVACIÓN
+          .input('estadoInicial', sql.Int, 2) // 2 = Entregado
+          .input('observacion', sql.NVarChar, observacionPersonalizada || null)
           .query(`
             INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado, observacion)
             VALUES (@idActividad, @matricula, @estadoInicial, @observacion)
@@ -3369,11 +3403,11 @@ const guardarCalificacionesEquipo = async (req, res) => {
       } else {
         idActividadAlumno = actividadAlumnoResult.recordset[0].id_actividad_alumno;
         
-        // 🆕 ACTUALIZAR ESTADO Y OBSERVACIÓN
+        // Actualizar estado y observación
         await transaction.request()
           .input('idActividadAlumno', sql.Int, idActividadAlumno)
           .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
-          .input('observacion', sql.NVarChar, observacion || null) // 🆕 REPLICAR OBSERVACIÓN
+          .input('observacion', sql.NVarChar, observacionPersonalizada || null)
           .query(`
             UPDATE tbl_actividad_alumno 
             SET id_estado = @nuevoEstado, observacion = @observacion 
@@ -3391,35 +3425,69 @@ const guardarCalificacionesEquipo = async (req, res) => {
           WHERE id_actividad_alumno = @idActividadAlumno
         `);
 
-      // Insertar calificaciones individuales (copia de las del equipo)
-      for (const cal of calificaciones) {
-        await transaction.request()
-          .input('idActividadAlumno', sql.Int, idActividadAlumno)
-          .input('idCriterio', sql.Int, cal.id_criterio)
-          .input('calificacion', sql.Float, cal.calificacion)
-          .query(`
-            INSERT INTO tbl_evaluacion_criterioActividad (
-              id_actividad_alumno, id_criterio, calificacion
-            ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
-          `);
+      // 🔧 INSERTAR CALIFICACIONES: PERSONALIZADAS O DEL EQUIPO
+      if (tieneCalificacionPersonalizada && integrantePersonalizado.criteriosPersonalizados) {
+        // 🎯 USAR CALIFICACIONES PERSONALIZADAS
+        console.log(`🌟 Aplicando calificaciones PERSONALIZADAS para ${integrante.vchMatricula}`);
+        
+        for (const [idCriterio, calificacionPersonalizada] of Object.entries(integrantePersonalizado.criteriosPersonalizados)) {
+          await transaction.request()
+            .input('idActividadAlumno', sql.Int, idActividadAlumno)
+            .input('idCriterio', sql.Int, parseInt(idCriterio))
+            .input('calificacion', sql.Float, calificacionPersonalizada)
+            .query(`
+              INSERT INTO tbl_evaluacion_criterioActividad (
+                id_actividad_alumno, id_criterio, calificacion
+              ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
+            `);
+          
+          console.log(`   ✅ Criterio ${idCriterio}: ${calificacionPersonalizada} puntos`);
+        }
+      } else {
+        // 📊 USAR CALIFICACIONES DEL EQUIPO (COMPORTAMIENTO ANTERIOR)
+        console.log(`📊 Aplicando calificaciones del EQUIPO para ${integrante.vchMatricula}`);
+        
+        for (const cal of calificaciones) {
+          await transaction.request()
+            .input('idActividadAlumno', sql.Int, idActividadAlumno)
+            .input('idCriterio', sql.Int, cal.id_criterio)
+            .input('calificacion', sql.Float, cal.calificacion)
+            .query(`
+              INSERT INTO tbl_evaluacion_criterioActividad (
+                id_actividad_alumno, id_criterio, calificacion
+              ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
+            `);
+        }
       }
     }
 
     await transaction.commit();
     
+    // 🎯 ESTADÍSTICAS FINALES
+    const integrantesPersonalizadosCount = integrantesPersonalizadosConMatriculasReales?.filter(ip => ip.tieneCalificacionPersonalizada).length || 0;
+    const integrantesGeneralesCount = integrantes.length - integrantesPersonalizadosCount;
+    
     console.log('✅ Calificaciones del equipo guardadas correctamente');
-    console.log(`📊 Calificaciones replicadas a ${integrantes.length} integrantes`);
+    console.log(`📊 Integrantes con calificación personalizada: ${integrantesPersonalizadosCount}`);
+    console.log(`📊 Integrantes con calificación del equipo: ${integrantesGeneralesCount}`);
     console.log(`🔧 Criterios calificados: ${calificaciones.length}`);
     console.log(`🎯 Estados actualizados a "Entregado"`);
-    console.log(`💬 Observación final guardada: "${observacion}"`); // 🆕 CONFIRMACIÓN LOG
     
     res.json({ 
       mensaje: 'Calificaciones del equipo guardadas correctamente',
       integrantes_calificados: integrantes.length,
       criterios_calificados: calificaciones.length,
       estadoActualizado: 'Entregado',
-      observacionGuardada: observacion, // 🆕 CONFIRMACIÓN EN RESPUESTA
-      detalle: `Se replicaron las calificaciones y observación a ${integrantes.length} integrantes del equipo`
+      observacionGuardada: observacion,
+      // 🆕 ESTADÍSTICAS DETALLADAS
+      calificacionesIndividuales: {
+        personalizadas: integrantesPersonalizadosCount,
+        generales: integrantesGeneralesCount,
+        total: integrantes.length
+      },
+      detalle: integrantesPersonalizadosCount > 0 ? 
+        `Se aplicaron ${integrantesPersonalizadosCount} calificaciones personalizadas y ${integrantesGeneralesCount} calificaciones generales` :
+        `Se replicaron las calificaciones del equipo a ${integrantes.length} integrantes`
     });
 
   } catch (error) {
@@ -3431,6 +3499,7 @@ const guardarCalificacionesEquipo = async (req, res) => {
     });
   }
 };
+
 // ===============================================
 // 🆕 FUNCIONES AUXILIARES ADICIONALES
 // ===============================================
