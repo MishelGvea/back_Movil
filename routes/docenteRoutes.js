@@ -54,6 +54,8 @@ const {
   guardarObservacionEquipo,
   obtenerObservacionAlumno,
   obtenerObservacionEquipo,
+  obtenerCalificacionesIntegrantesEquipo,
+  obtenerComparativaEquipoIndividual,
 
   // Procedimientos almacenados
   obtenerConcentradoFinal,
@@ -118,6 +120,12 @@ router.get('/:claveDocente/materia/:claveMateria/grupo/:idGrupo/estadisticas', o
 
 router.post('/crear-actividad', crearActividad);
 router.post('/crear-actividad-completa-componente', crearActividadCompletaConComponente);
+
+// 🆕 Ruta para obtener calificaciones de integrantes de equipo
+router.get('/actividad-equipo/:idActividadEquipo/integrantes-calificaciones', obtenerCalificacionesIntegrantesEquipo);
+
+// 🆕 Ruta para comparativa (opcional)
+router.get('/actividad-equipo/:idActividadEquipo/comparativa', obtenerComparativaEquipoIndividual);
 
 // =========================================
 // EQUIPOS
