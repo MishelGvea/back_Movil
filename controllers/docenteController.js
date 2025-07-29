@@ -196,6 +196,8 @@ const obtenerPeriodoActual = async (req, res) => {
 };
 
 // Obtener grupos que atiende el docente en una materia
+// En tu docenteController.js, modifica obtenerGruposPorMateriaDocente:
+
 const obtenerGruposPorMateriaDocente = async (req, res) => {
   const { clave, clvMateria } = req.params;
 
@@ -208,19 +210,31 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
         SELECT 
           g.id_grupo AS idGrupo,
           g.vchGrupo,
-          COUNT(a.vchMatricula) AS totalAlumnos
+          COUNT(DISTINCT a_alumnos.vchMatricula) AS totalAlumnos,
+          -- 🆕 AGREGAR ESTA LÍNEA
+          COUNT(DISTINCT act.id_actividad) AS totalActividades
         FROM dbo.tbl_docente_materia AS dm
         JOIN dbo.tbl_docente_materia_grupo AS dmg 
           ON dm.idDocenteMateria = dmg.id_DocenteMateria
         JOIN dbo.tbl_grupos AS g 
           ON dmg.id_grupo = g.id_grupo
-        LEFT JOIN dbo.tblAlumnos AS a 
-          ON a.chvGrupo = g.id_grupo
-          AND a.vchClvCuatri = dm.vchCuatrimestre
-          AND a.vchPeriodo = dm.Periodo
+        LEFT JOIN dbo.tblAlumnos AS a_alumnos 
+          ON a_alumnos.chvGrupo = g.id_grupo
+          AND a_alumnos.vchClvCuatri = dm.vchCuatrimestre
+          AND a_alumnos.vchPeriodo = dm.Periodo
+        -- 🆕 AGREGAR ESTOS JOINS
+        LEFT JOIN dbo.tbl_actividad_grupo AS ag 
+          ON ag.id_grupo = g.id_grupo
+        LEFT JOIN dbo.tbl_actividades AS act 
+          ON ag.id_actividad = act.id_actividad
+        LEFT JOIN dbo.tbl_instrumento AS i 
+          ON act.id_instrumento = i.id_instrumento
+          AND i.vchClvTrabajador = dm.vchClvTrabajador
+          AND i.vchClvMateria = dm.vchClvMateria
         WHERE dm.vchClvTrabajador = @clave
           AND dm.vchClvMateria = @clvMateria
         GROUP BY g.id_grupo, g.vchGrupo
+        ORDER BY g.vchGrupo
       `);
 
     res.json(result.recordset);
@@ -229,7 +243,6 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-
 // ===============================================
 // 🆕 FUNCIONES CRUD PARA GESTIÓN DE COMPONENTES
 // ===============================================
