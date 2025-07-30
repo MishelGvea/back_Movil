@@ -649,16 +649,13 @@ const obtenerActividadesPorAlumno = async (req, res) => {
   }
 };
 
-// ===============================================
-// 🔧 FUNCIÓN ADAPTADA: obtenerDetalleActividad CON SP
-// ===============================================
 const obtenerDetalleActividad = async (req, res) => {
   const { matricula, idActividad } = req.params;
 
   try {
     const pool = await sql.connect(config);
 
-    console.log(`🔍 === DETALLE ACTIVIDAD (CON OBSERVACIONES) ===`);
+    console.log(`🔍 === DETALLE ACTIVIDAD (OBSERVACIONES CORREGIDAS) ===`);
     console.log(`📋 Parámetros: Matrícula: ${matricula}, ID Actividad: ${idActividad}`);
 
     // PASO 1: Ejecutar SP para obtener detalle de actividad
@@ -689,6 +686,48 @@ const obtenerDetalleActividad = async (req, res) => {
     // PASO 3: Verificar calificación
     const calificacionReal = await obtenerCalificacionRealActividad(pool, idActividad, matricula);
     
+    // 🔧 PASO 3.5: FIX OBSERVACIONES - Consulta directa para actividades calificadas
+    let observacionesCorrectas = actividad.observaciones;
+    
+    if (calificacionReal !== null) {
+      // Si está calificada, obtener observación directamente de la tabla específica del alumno
+      try {
+        console.log(`🔧 Actividad calificada - Obteniendo observación específica del alumno`);
+        
+        const observacionDirecta = await pool.request()
+          .input('matricula', sql.VarChar, matricula)
+          .input('idActividad', sql.Int, idActividad)
+          .query(`
+            SELECT observacion
+            FROM tbl_actividad_alumno 
+            WHERE vchMatricula = @matricula 
+            AND id_actividad = @idActividad
+          `);
+
+        if (observacionDirecta.recordset.length > 0) {
+          const observacionEspecifica = observacionDirecta.recordset[0].observacion;
+          
+          // Solo usar la observación si realmente tiene contenido
+          if (observacionEspecifica && observacionEspecifica.trim() !== '' && observacionEspecifica !== 'Sin observaciones registradas') {
+            observacionesCorrectas = observacionEspecifica.trim();
+            console.log(`✅ Observación específica del alumno: "${observacionesCorrectas}"`);
+          } else {
+            observacionesCorrectas = null;
+            console.log(`ℹ️ Este alumno no tiene observación específica`);
+          }
+        } else {
+          observacionesCorrectas = null;
+          console.log(`ℹ️ No se encontró registro para este alumno en la actividad`);
+        }
+        
+      } catch (error) {
+        console.log(`⚠️ Error al obtener observación específica:`, error.message);
+        // Mantener las observaciones originales si hay error
+      }
+    } else {
+      console.log(`ℹ️ Actividad no calificada - Usando observaciones originales`);
+    }
+
     // PASO 4: Manejo de criterios
     let rubrica = [];
     let estadoCriterios = {
@@ -747,7 +786,7 @@ const obtenerDetalleActividad = async (req, res) => {
       actividad.estado_original
     );
 
-    // PASO 6: Respuesta CON OBSERVACIONES INCLUIDAS
+    // PASO 6: Respuesta CON OBSERVACIONES CORREGIDAS
     const response = {
       id_actividad: actividad.id_actividad,
       titulo: actividad.titulo,
@@ -765,8 +804,8 @@ const obtenerDetalleActividad = async (req, res) => {
       modalidad_nombre: actividad.modalidad_nombre,
       rubrica: rubrica,
       
-      // 🆕 INCLUIR OBSERVACIONES CORRECTAMENTE
-      observaciones: actividad.observaciones, // Puede ser null, string vacío, o string con contenido
+      // 🔧 USAR OBSERVACIONES CORREGIDAS
+      observaciones: observacionesCorrectas,
       
       tiene_calificacion: calificacionReal !== null,
       calificacion_info: calificacionReal ? {
@@ -791,11 +830,12 @@ const obtenerDetalleActividad = async (req, res) => {
         urgencia: estadoDinamico.urgencia
       },
       
-      fuente_calculo: 'SP_DETALLE_CON_OBSERVACIONES'
+      fuente_calculo: 'SP_DETALLE_OBSERVACIONES_CORREGIDAS_CONTROLLER'
     };
 
-    console.log(`✅ Detalle obtenido con observaciones: ${response.titulo}`);
-    console.log(`💬 Observaciones incluidas: ${actividad.observaciones ? 'SÍ' : 'NO'}`);
+    console.log(`✅ Detalle obtenido con observaciones CORREGIDAS: ${response.titulo}`);
+    console.log(`💬 Observaciones corregidas incluidas: ${observacionesCorrectas ? 'SÍ' : 'NO'}`);
+    console.log(`🔧 Fix aplicado desde controller - No afecta BD`);
     console.log(`🔍 === FIN DETALLE ACTIVIDAD ===`);
 
     res.json(response);
@@ -808,6 +848,7 @@ const obtenerDetalleActividad = async (req, res) => {
     });
   }
 };
+
 
 // ===============================================
 // 🔧 FUNCIÓN ADAPTADA: obtenerActividadesEntregadas CON SP
