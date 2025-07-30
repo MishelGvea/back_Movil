@@ -1,23 +1,16 @@
 const { sql, config } = require('../db/sqlConfig');
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: detectarPeriodoAutomatico
+// 🔧 FUNCIÓN ADAPTADA: detectarPeriodoAutomatico CON SP
 // ===============================================
 const detectarPeriodoAutomatico = async (pool, matricula) => {
   try {
     console.log(`🔍 === DETECTANDO PERÍODO AUTOMÁTICO PARA ${matricula} ===`);
     
-    // PASO 1: Obtener datos básicos del alumno
+    // PASO 1: Obtener datos básicos del alumno usando SP
     const alumnoResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT 
-          vchPeriodo as periodo_registrado,
-          vchClvCuatri as cuatrimestre,
-          chvGrupo as grupo
-        FROM tblAlumnos 
-        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
-      `);
+      .execute('sp_detectarPeriodoAutomatico');
 
     if (alumnoResult.recordset.length === 0) {
       throw new Error('Alumno no encontrado');
@@ -26,84 +19,10 @@ const detectarPeriodoAutomatico = async (pool, matricula) => {
     const alumno = alumnoResult.recordset[0];
     console.log(`📋 Alumno: cuatrimestre=${alumno.cuatrimestre}, período_registrado=${alumno.periodo_registrado}`);
 
-    // PASO 2: Detectar el período MÁS RECIENTE con actividades para el alumno
+    // PASO 2: Detectar el período MÁS RECIENTE con actividades para el alumno usando SP
     const periodoMasReciente = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .input('cuatrimestre', sql.VarChar, alumno.cuatrimestre)
-      .input('grupo', sql.VarChar, alumno.grupo)
-      .query(`
-        WITH PeriodosConActividades AS (
-          -- Períodos con actividades INDIVIDUALES
-          SELECT DISTINCT 
-            I.vchPeriodo as periodo,
-            COUNT(*) as actividades_individuales,
-            MAX(AG.fecha_asignacion) as fecha_mas_reciente,
-            'Individual' as tipo
-          FROM tbl_instrumento I
-          INNER JOIN tbl_actividades A ON I.id_instrumento = A.id_instrumento
-          INNER JOIN tbl_actividad_grupo AG ON A.id_actividad = AG.id_actividad
-          INNER JOIN tbl_actividad_alumno AA ON A.id_actividad = AA.id_actividad
-          INNER JOIN tbl_materias M ON I.vchClvMateria = M.vchClvMateria AND I.idPeriodo = M.idPeriodo
-          WHERE AA.vchMatricula = @matricula
-          AND M.vchCuatrimestre = @cuatrimestre
-          AND A.id_modalidad = 1
-          GROUP BY I.vchPeriodo
-
-          UNION ALL
-
-          -- Períodos con actividades de EQUIPO
-          SELECT DISTINCT 
-            I.vchPeriodo as periodo,
-            COUNT(*) as actividades_equipo,
-            MAX(AG.fecha_asignacion) as fecha_mas_reciente,
-            'Equipo' as tipo
-          FROM tbl_instrumento I
-          INNER JOIN tbl_actividades A ON I.id_instrumento = A.id_instrumento
-          INNER JOIN tbl_actividad_grupo AG ON A.id_actividad = AG.id_actividad
-          INNER JOIN tbl_actividad_equipo AE ON A.id_actividad = AE.id_actividad
-          INNER JOIN tbl_equipos E ON AE.id_equipo = E.id_equipo
-          INNER JOIN tbl_equipo_alumno EA ON E.id_equipo = EA.id_equipo
-          INNER JOIN tbl_materias M ON I.vchClvMateria = M.vchClvMateria AND I.idPeriodo = M.idPeriodo
-          WHERE EA.vchMatricula = @matricula
-          AND M.vchCuatrimestre = @cuatrimestre
-          AND A.id_modalidad = 2
-          GROUP BY I.vchPeriodo
-
-          UNION ALL
-
-          -- Períodos con actividades de GRUPO
-          SELECT DISTINCT 
-            I.vchPeriodo as periodo,
-            COUNT(*) as actividades_grupo,
-            MAX(AG.fecha_asignacion) as fecha_mas_reciente,
-            'Grupo' as tipo
-          FROM tbl_instrumento I
-          INNER JOIN tbl_actividades A ON I.id_instrumento = A.id_instrumento
-          INNER JOIN tbl_actividad_grupo AG ON A.id_actividad = AG.id_actividad
-          INNER JOIN tbl_grupos G ON AG.id_grupo = G.id_grupo
-          INNER JOIN tbl_materias M ON I.vchClvMateria = M.vchClvMateria AND I.idPeriodo = M.idPeriodo
-          WHERE G.vchGrupo = @grupo
-          AND M.vchCuatrimestre = @cuatrimestre
-          AND A.id_modalidad = 3
-          GROUP BY I.vchPeriodo
-        ),
-        ResumenPeriodos AS (
-          SELECT 
-            periodo,
-            SUM(actividades_individuales) as total_actividades,
-            MAX(fecha_mas_reciente) as ultima_actividad,
-            COUNT(DISTINCT tipo) as tipos_modalidad
-          FROM PeriodosConActividades
-          GROUP BY periodo
-        )
-        SELECT TOP 1 
-          periodo,
-          total_actividades,
-          ultima_actividad,
-          tipos_modalidad
-        FROM ResumenPeriodos
-        ORDER BY periodo DESC, ultima_actividad DESC
-      `);
+      .execute('sp_periodoMasReciente');
 
     let periodoFinal = alumno.periodo_registrado;
     let esAutomatico = false;
@@ -150,14 +69,10 @@ const detectarPeriodoAutomatico = async (pool, matricula) => {
 
   } catch (error) {
     console.error('❌ Error en detección automática de período:', error);
-    // Fallback al período registrado del alumno
+    // Fallback al período registrado del alumno usando SP
     const fallbackResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT vchPeriodo as periodo, vchClvCuatri as cuatrimestre, chvGrupo as grupo
-        FROM tblAlumnos 
-        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
-      `);
+      .execute('sp_fallbackResult');
     
     if (fallbackResult.recordset.length > 0) {
       const alumno = fallbackResult.recordset[0];
@@ -352,6 +267,7 @@ const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal 
     };
   }
 };
+
 const verificarEstadoActividad = (actividad) => {
   if (!actividad.fecha_entrega) return 'Sin fecha';
   
@@ -396,8 +312,9 @@ const probarConFechaReal = () => {
   
   return resultado;
 };
+
 // ===============================================
-// FUNCIONES AUXILIARES PARA CALIFICACIONES REALES
+// FUNCIONES AUXILIARES PARA CALIFICACIONES REALES ADAPTADAS CON SP
 // ===============================================
 
 const obtenerCalificacionRealActividad = async (pool, idActividad, matricula) => {
@@ -407,20 +324,7 @@ const obtenerCalificacionRealActividad = async (pool, idActividad, matricula) =>
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT 
-          SUM(eca.calificacion) as puntos_obtenidos_total,
-          COUNT(eca.id_criterio) as criterios_calificados,
-          i.valor_total as puntos_maximos_total,
-          ROUND((SUM(eca.calificacion) * 10.0) / i.valor_total, 2) as calificacion_sobre_10
-        FROM tbl_evaluacion_criterioActividad eca
-        INNER JOIN tbl_actividad_alumno aa ON eca.id_actividad_alumno = aa.id_actividad_alumno
-        INNER JOIN tbl_actividades a ON aa.id_actividad = a.id_actividad
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        WHERE aa.vchMatricula = @matricula 
-          AND a.id_actividad = @idActividad
-        GROUP BY i.valor_total
-      `);
+      .execute('sp_obtenerCalificacionRealActividad');
     
     if (result.recordset.length > 0) {
       const data = result.recordset[0];
@@ -441,30 +345,7 @@ const obtenerCriteriosCalificadosReales = async (pool, idActividad, matricula) =
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT 
-          c.id_criterio,
-          c.nombre as criterio,
-          c.descripcion,
-          c.valor_maximo as puntos_maximos,
-          ISNULL(eca.calificacion, 0) as puntos_obtenidos,
-          CASE 
-            WHEN eca.calificacion IS NOT NULL AND eca.calificacion >= (c.valor_maximo * 0.6) THEN 1 
-            ELSE 0 
-          END as cumplido,
-          CASE 
-            WHEN eca.calificacion IS NOT NULL THEN 1 
-            ELSE 0 
-          END as calificado
-        FROM tbl_criterios c
-        INNER JOIN tbl_instrumento i ON c.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_actividades a ON a.id_instrumento = i.id_instrumento
-        LEFT JOIN tbl_actividad_alumno aa ON aa.id_actividad = a.id_actividad AND aa.vchMatricula = @matricula
-        LEFT JOIN tbl_evaluacion_criterioActividad eca ON eca.id_actividad_alumno = aa.id_actividad_alumno 
-                                                       AND eca.id_criterio = c.id_criterio
-        WHERE a.id_actividad = @idActividad
-        ORDER BY c.id_criterio
-      `);
+      .execute('sp_obtenerCriteriosCalificadosReales');
     
     console.log(`📋 Criterios encontrados: ${result.recordset.length}`);
     return result.recordset;
@@ -475,19 +356,16 @@ const obtenerCriteriosCalificadosReales = async (pool, idActividad, matricula) =
 };
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerFechasCuatrimestre
+// 🔧 FUNCIÓN ADAPTADA: obtenerFechasCuatrimestre CON SP
 // ===============================================
 const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
   try {
     console.log(`📅 Consultando fechas para periodo: ${periodo}, cuatrimestre: ${cuatrimestre}`);
     
     const periodoResult = await pool.request()
+      .input('periodo', sql.VarChar, periodo)
       .input('cuatrimestre', sql.VarChar, cuatrimestre)
-      .query(`
-        SELECT DISTINCT M.idPeriodo
-        FROM tbl_materias M
-        WHERE M.vchCuatrimestre = @cuatrimestre
-      `);
+      .execute('sp_obtenerFechasCuatrimestre');
 
     let idPeriodo = null;
     if (periodoResult.recordset.length > 0) {
@@ -501,11 +379,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
     if (idPeriodo) {
       fechasResult = await pool.request()
         .input('idPeriodo', sql.Int, idPeriodo)
-        .query(`
-          SELECT P.mesInicia, P.mesTermina
-          FROM tbl_periodos P
-          WHERE P.idPeriodo = @idPeriodo
-        `);
+        .execute('sp_fechasResult');
         
       console.log(`📅 Resultado consulta tbl_periodos:`, fechasResult.recordset);
     }
@@ -575,7 +449,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerDatosAlumno
+// 🔧 FUNCIÓN CORREGIDA: obtenerDatosAlumno CON SP
 // ===============================================
 const obtenerDatosAlumno = async (req, res) => {
   const { matricula } = req.params;
@@ -583,126 +457,63 @@ const obtenerDatosAlumno = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    console.log(`🔍 === INICIO DATOS ALUMNO (DETECCIÓN AUTOMÁTICA) ===`);
+    console.log(`🔍 === INICIO DATOS ALUMNO (SP CORREGIDO) ===`);
     console.log(`📋 Matrícula: ${matricula}`);
 
-    // 🆕 DETECTAR PERÍODO AUTOMÁTICAMENTE
-    const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
-    console.log(`📅 PERÍODO DETECTADO: ${periodoInfo.periodo}`);
-    console.log(`🔧 ${periodoInfo.razon}`);
-
-    // PASO 1: Consulta del alumno con datos básicos
-    const alumno = await pool.request()
+    // PASO 1: Ejecutar SP que incluye detección de período Y datos del alumno
+    const alumnoResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT TOP 1 
-          A.vchNombre + ' ' + A.vchAPaterno + ' ' + A.vchAMaterno AS nombre,
-          C.vchNomCarrera AS carrera,
-          G.vchGrupo AS grupo,
-          A.vchClvCuatri AS cuatrimestre,
-          A.vchPeriodo AS periodo_registrado
-        FROM dbo.tblAlumnos A
-        JOIN dbo.tblCarreras C ON C.chrClvCarrera = A.chrClvCarrera
-        JOIN dbo.tbl_grupos G ON G.id_grupo = A.chvGrupo
-        WHERE RTRIM(A.vchMatricula) = RTRIM(@matricula)
-      `);
+      .execute('sp_obtenerDatosAlumno');
 
-    const alumnoData = alumno.recordset[0];
+    // El SP retorna múltiples recordsets:
+    // recordsets[0]: resultado de sp_DetectarPeriodoAutomatico (periodo info)
+    // recordsets[1]: datos del alumno (nombre, carrera, etc.)
+    
+    if (!alumnoResult.recordsets || alumnoResult.recordsets.length < 2) {
+      return res.status(404).json({ mensaje: 'Error al obtener datos del alumno' });
+    }
 
+    // PASO 2: Extraer datos del período (primer recordset)
+    const periodoData = alumnoResult.recordsets[0][0];
+    if (!periodoData) {
+      return res.status(404).json({ mensaje: 'No se pudo detectar período para el alumno' });
+    }
+
+    // PASO 3: Extraer datos del alumno (segundo recordset)  
+    const alumnoData = alumnoResult.recordsets[1][0];
     if (!alumnoData) {
       return res.status(404).json({ mensaje: 'Alumno no encontrado' });
     }
 
     console.log(`✅ Alumno encontrado: ${alumnoData.nombre}`);
+    console.log(`📅 Período detectado: ${periodoData.periodo_registrado}`);
 
-    // 🆕 USAR PERÍODO DETECTADO AUTOMÁTICAMENTE
+    // PASO 4: Construir info del período
+    const periodoInfo = {
+      periodo: periodoData.periodo_registrado,
+      cuatrimestre: periodoData.cuatrimestre,
+      grupo: periodoData.grupo,
+      periodo_registrado: periodoData.periodo_registrado,
+      automatico: false, // SP ya maneja la lógica
+      razon: 'Obtenido via SP integrado',
+      timestamp: new Date().toISOString()
+    };
+
+    // PASO 5: Obtener fechas del cuatrimestre
     const fechasCuatrimestre = await obtenerFechasCuatrimestre(pool, periodoInfo.periodo, periodoInfo.cuatrimestre);
 
-    // PASO 2: CONSULTA DE MATERIAS CORREGIDA - USAR tbl_materias
-    console.log(`🔍 Obteniendo materias del período detectado: ${periodoInfo.periodo}`);
+    // PASO 6: Obtener materias usando SP
+    console.log(`🔍 Obteniendo materias del período: ${periodoInfo.periodo}`);
     
     const materiasResult = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
       .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
-      .query(`
-        WITH MateriasDelAlumno AS (
-          -- Materias por actividades INDIVIDUALES
-          SELECT DISTINCT
-            M.vchNomMateria,
-            CONCAT(D.vchAPaterno, ' ', D.vchAMaterno, ' ', D.vchNombre) AS Docente,
-            'Individual' as TipoAcceso,
-            1 as Prioridad
-          FROM tblAlumnos A
-          INNER JOIN tbl_actividad_alumno AA ON AA.vchMatricula = A.vchMatricula
-          INNER JOIN tbl_actividades AC ON AC.id_actividad = AA.id_actividad
-          INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-          INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = I.idPeriodo
-          INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
-          WHERE A.vchMatricula = @matricula 
-            AND I.vchPeriodo = @periodo_detectado
-            AND M.vchCuatrimestre = @cuatrimestre_alumno
+      .execute('sp_materiasResult');
 
-          UNION
+    console.log(`📚 Materias encontradas: ${materiasResult.recordset.length}`);
 
-          -- Materias por actividades de EQUIPO
-          SELECT DISTINCT
-            M.vchNomMateria,
-            CONCAT(D.vchAPaterno, ' ', D.vchAMaterno, ' ', D.vchNombre) AS Docente,
-            'Equipo' as TipoAcceso,
-            2 as Prioridad
-          FROM tblAlumnos A
-          INNER JOIN tbl_equipo_alumno EA ON EA.vchMatricula = A.vchMatricula
-          INNER JOIN tbl_equipos E ON E.id_equipo = EA.id_equipo
-          INNER JOIN tbl_actividad_equipo AE ON AE.id_equipo = E.id_equipo
-          INNER JOIN tbl_actividades AC ON AC.id_actividad = AE.id_actividad
-          INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-          INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = I.idPeriodo
-          INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
-          WHERE A.vchMatricula = @matricula 
-            AND I.vchPeriodo = @periodo_detectado
-            AND M.vchCuatrimestre = @cuatrimestre_alumno
-
-          UNION
-
-          -- Materias por actividades de GRUPO
-          SELECT DISTINCT
-            M.vchNomMateria,
-            CONCAT(D.vchAPaterno, ' ', D.vchAMaterno, ' ', D.vchNombre) AS Docente,
-            'Grupo' as TipoAcceso,
-            3 as Prioridad
-          FROM tblAlumnos A
-          INNER JOIN tbl_grupos G ON G.vchGrupo = A.chvGrupo
-          INNER JOIN tbl_actividad_grupo AG ON AG.id_grupo = G.id_grupo
-          INNER JOIN tbl_actividades AC ON AC.id_actividad = AG.id_actividad
-          INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-          INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = I.idPeriodo
-          INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
-          WHERE A.vchMatricula = @matricula 
-            AND I.vchPeriodo = @periodo_detectado
-            AND M.vchCuatrimestre = @cuatrimestre_alumno
-        ),
-        MateriasSinDuplicados AS (
-          SELECT 
-            vchNomMateria,
-            Docente,
-            TipoAcceso,
-            ROW_NUMBER() OVER (PARTITION BY vchNomMateria ORDER BY Prioridad) as rn
-          FROM MateriasDelAlumno
-        )
-        SELECT 
-          vchNomMateria as nombreMateria,
-          Docente,
-          TipoAcceso,
-          'Grupo'
-        FROM MateriasSinDuplicados
-        WHERE rn = 1
-        ORDER BY vchNomMateria
-      `);
-
-    console.log(`📚 Materias encontradas (período automático): ${materiasResult.recordset.length}`);
-
-    // PASO 3: Formatear materias
+    // PASO 7: Formatear materias
     const materias = materiasResult.recordset.map(m => ({
       nombre: m.nombreMateria,
       grupo: alumnoData.grupo,
@@ -711,8 +522,8 @@ const obtenerDatosAlumno = async (req, res) => {
       tipoAcceso: m.TipoAcceso
     }));
 
-    console.log(`✅ ${materias.length} materias procesadas (PERÍODO AUTOMÁTICO)`);
-    console.log(`🔍 === FIN DATOS ALUMNO (DETECCIÓN AUTOMÁTICA) ===`);
+    console.log(`✅ ${materias.length} materias procesadas`);
+    console.log(`🔍 === FIN DATOS ALUMNO (SP CORREGIDO) ===`);
 
     res.json({
       nombre: alumnoData.nombre,
@@ -727,7 +538,6 @@ const obtenerDatosAlumno = async (req, res) => {
         nombreRango: fechasCuatrimestre.nombreRango,
         año: fechasCuatrimestre.año
       },
-      // 🆕 INFORMACIÓN DE DETECCIÓN AUTOMÁTICA
       periodo_info: {
         detectado_automaticamente: periodoInfo.automatico,
         periodo_registrado: periodoInfo.periodo_registrado,
@@ -736,20 +546,20 @@ const obtenerDatosAlumno = async (req, res) => {
         timestamp: periodoInfo.timestamp
       },
       diagnostico: {
-        fuente_materias: 'TBL_MATERIAS_PERIODO_AUTOMATICO',
+        fuente_materias: 'SP_MATERIAS_RESULT_CORREGIDO',
         total_materias_encontradas: materias.length,
-        version_bd: 'USANDO_TBL_MATERIAS_CORRECTA'
+        version_bd: 'SP_MULTIPLE_RECORDSETS_FIXED'
       }
     });
 
   } catch (err) {
-    console.error('❌ Error al obtener datos del alumno (detección automática):', err);
+    console.error('❌ Error al obtener datos del alumno (SP):', err);
     res.status(500).json({ mensaje: 'Error en el servidor al consultar alumno' });
   }
 };
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerActividadesPorAlumno
+// 🔧 FUNCIÓN ADAPTADA: obtenerActividadesPorAlumno CON SP
 // ===============================================
 const obtenerActividadesPorAlumno = async (req, res) => {
   const { matricula, materia } = req.params;
@@ -764,196 +574,11 @@ const obtenerActividadesPorAlumno = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // 🔧 CONSULTA CORREGIDA CON FECHAS SIN CONVERSIONES
+    // 🔧 CONSULTA USANDO SP
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('materia', sql.VarChar, materia)
-      .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
-      .input('grupo_alumno', sql.VarChar, periodoInfo.grupo)
-      .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
-      .query(`
-      WITH ActividadesUnicas AS (
-        -- MODALIDAD 1: INDIVIDUAL
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
-          a.id_modalidad,
-          -- 🔧 FORMATEAR FECHAS SIN CONVERSIONES UTC
-          CONVERT(VARCHAR(19), ag.fecha_asignacion, 120) as fecha_asignacion,
-          CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-          ag.fecha_entrega as fecha_entrega_raw,
-          ISNULL(cer.vch_estado, 'Pendiente') as estado_original,
-          ins.nombre as instrumento,
-          ti.nombre_tipo as tipoInstrumento,
-          CASE 
-            WHEN ins.parcial = 1 THEN 'Parcial 1'
-            WHEN ins.parcial = 2 THEN 'Parcial 2'
-            WHEN ins.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          'Individual' as modalidad_tipo,
-          ISNULL(vce.componente, 'Actividad') as tipo_componente,
-          ISNULL(vce.valor_componente, 0) as valor_componente,
-          CASE 
-            WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
-            ELSE 'Normal'
-          END as clasificacion_actividad,
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ) THEN 1 ELSE 0 
-          END as tiene_calificacion_bd,
-          1 as prioridad
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-        INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria AND ins.idPeriodo = m.idPeriodo
-        INNER JOIN tbl_tipo_instrumento ti ON ti.id_tipo_instrumento = ins.id_tipo_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
-        LEFT JOIN tbl_cat_estados_reactivo cer ON aa.id_estado = cer.id_estado
-        LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-        WHERE aa.vchMatricula = @matricula 
-        AND m.vchNomMateria = @materia
-        AND ins.vchPeriodo = @periodo_detectado
-        AND m.vchCuatrimestre = @cuatrimestre_alumno
-        AND a.id_modalidad = 1
-
-        UNION ALL
-
-        -- MODALIDAD 2: EQUIPO
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
-          a.id_modalidad,
-          CONVERT(VARCHAR(19), ag.fecha_asignacion, 120) as fecha_asignacion,
-          CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-          ag.fecha_entrega as fecha_entrega_raw,
-          ISNULL(cer.vch_estado, 'Pendiente') as estado_original,
-          ins.nombre as instrumento,
-          ti.nombre_tipo as tipoInstrumento,
-          CASE 
-            WHEN ins.parcial = 1 THEN 'Parcial 1'
-            WHEN ins.parcial = 2 THEN 'Parcial 2'
-            WHEN ins.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          'Equipo' as modalidad_tipo,
-          ISNULL(vce.componente, 'Actividad') as tipo_componente,
-          ISNULL(vce.valor_componente, 0) as valor_componente,
-          CASE 
-            WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
-            ELSE 'Normal'
-          END as clasificacion_actividad,
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ) THEN 1 ELSE 0 
-          END as tiene_calificacion_bd,
-          2 as prioridad
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-        INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria AND ins.idPeriodo = m.idPeriodo
-        INNER JOIN tbl_tipo_instrumento ti ON ti.id_tipo_instrumento = ins.id_tipo_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        INNER JOIN tbl_equipo_alumno ea_alumno ON e.id_equipo = ea_alumno.id_equipo
-        LEFT JOIN tbl_cat_estados_reactivo cer ON ae.id_estado = cer.id_estado
-        LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-        WHERE ea_alumno.vchMatricula = @matricula 
-        AND m.vchNomMateria = @materia
-        AND ins.vchPeriodo = @periodo_detectado
-        AND m.vchCuatrimestre = @cuatrimestre_alumno
-        AND a.id_modalidad = 2
-
-        UNION ALL
-
-        -- MODALIDAD 3: GRUPO
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
-          a.id_modalidad,
-          CONVERT(VARCHAR(19), ag.fecha_asignacion, 120) as fecha_asignacion,
-          CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-          ag.fecha_entrega as fecha_entrega_raw,
-          ISNULL(cer.vch_estado, 'Pendiente') as estado_original,
-          ins.nombre as instrumento,
-          ti.nombre_tipo as tipoInstrumento,
-          CASE 
-            WHEN ins.parcial = 1 THEN 'Parcial 1'
-            WHEN ins.parcial = 2 THEN 'Parcial 2'
-            WHEN ins.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          'Grupo' as modalidad_tipo,
-          ISNULL(vce.componente, 'Actividad') as tipo_componente,
-          ISNULL(vce.valor_componente, 0) as valor_componente,
-          CASE 
-            WHEN UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%EXAMEN%' OR 
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%FINAL%' OR
-                UPPER(ISNULL(vce.componente, 'Actividad')) LIKE '%PRACTICA FINAL%' THEN 'Final'
-            ELSE 'Normal'
-          END as clasificacion_actividad,
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ) THEN 1 ELSE 0 
-          END as tiene_calificacion_bd,
-          3 as prioridad
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-        INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria AND ins.idPeriodo = m.idPeriodo
-        INNER JOIN tbl_tipo_instrumento ti ON ti.id_tipo_instrumento = ins.id_tipo_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-        LEFT JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad AND aa.vchMatricula = @matricula
-        LEFT JOIN tbl_cat_estados_reactivo cer ON aa.id_estado = cer.id_estado
-        LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-        WHERE g.vchGrupo = @grupo_alumno 
-        AND m.vchNomMateria = @materia
-        AND ins.vchPeriodo = @periodo_detectado
-        AND m.vchCuatrimestre = @cuatrimestre_alumno
-        AND a.id_modalidad = 3
-      ),
-      ActividadesSinDuplicados AS (
-        SELECT 
-          id_actividad,
-          titulo,
-          descripcion,
-          id_modalidad,
-          fecha_asignacion,
-          fecha_entrega,
-          fecha_entrega_raw,
-          estado_original,
-          instrumento,
-          tipoInstrumento,
-          parcial,
-          modalidad_tipo,
-          tipo_componente,
-          valor_componente,
-          clasificacion_actividad,
-          tiene_calificacion_bd,
-          ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
-        FROM ActividadesUnicas
-      )
-      SELECT *
-      FROM ActividadesSinDuplicados
-      WHERE rn = 1
-      ORDER BY fecha_entrega_raw ASC
-      `);
+      .execute('sp_ObtenerActividadesPorAlumno');
 
     console.log(`📊 Actividades obtenidas (período automático): ${result.recordset.length}`);
 
@@ -992,7 +617,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
         es_actividad_final: actividad.clasificacion_actividad === 'Final',
         
         tiene_calificacion: actividad.tiene_calificacion_bd === 1,
-        fuente_estado: 'FECHAS_CORREGIDAS_SIN_UTC'
+        fuente_estado: 'SP_ACTIVIDADES_CORREGIDAS'
       };
     });
 
@@ -1025,7 +650,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerDetalleActividad
+// 🔧 FUNCIÓN ADAPTADA: obtenerDetalleActividad CON SP
 // ===============================================
 const obtenerDetalleActividad = async (req, res) => {
   const { matricula, idActividad } = req.params;
@@ -1036,173 +661,35 @@ const obtenerDetalleActividad = async (req, res) => {
     console.log(`🔍 === DETALLE ACTIVIDAD (CON OBSERVACIONES) ===`);
     console.log(`📋 Parámetros: Matrícula: ${matricula}, ID Actividad: ${idActividad}`);
 
-    // PASO 1: Verificar acceso del alumno a la actividad
-    const verificacionResult = await pool.request()
+    // PASO 1: Ejecutar SP para obtener detalle de actividad
+    const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          A.vchPeriodo as periodo_alumno,
-          A.chvGrupo as grupo_alumno,
-          AC.id_modalidad,
-          AC.titulo,
-          'Verificado' as acceso
-        FROM tblAlumnos A
-        CROSS JOIN tbl_actividades AC
-        WHERE A.vchMatricula = @matricula 
-        AND AC.id_actividad = @idActividad
-        AND (
-          (AC.id_modalidad = 1 AND EXISTS (
-            SELECT 1 FROM tbl_actividad_alumno AA 
-            WHERE AA.id_actividad = AC.id_actividad AND AA.vchMatricula = @matricula
-          ))
-          OR
-          (AC.id_modalidad = 2 AND EXISTS (
-            SELECT 1 FROM tbl_actividad_equipo AE
-            INNER JOIN tbl_equipos E ON E.id_equipo = AE.id_equipo
-            INNER JOIN tbl_equipo_alumno EA ON EA.id_equipo = E.id_equipo
-            WHERE AE.id_actividad = AC.id_actividad AND EA.vchMatricula = @matricula
-          ))
-          OR
-          (AC.id_modalidad = 3 AND EXISTS (
-            SELECT 1 FROM tbl_actividad_grupo AG
-            INNER JOIN tbl_grupos G ON G.id_grupo = AG.id_grupo
-            WHERE AG.id_actividad = AC.id_actividad AND G.vchGrupo = A.chvGrupo
-          ))
-        )
-      `);
-
-    if (verificacionResult.recordset.length === 0) {
-      return res.status(404).json({ mensaje: 'Actividad no encontrada o sin acceso' });
-    }
-
-    const modalidad = verificacionResult.recordset[0].id_modalidad;
-    console.log(`🎯 Modalidad de actividad: ${modalidad}`);
-
-    // PASO 2: Obtener detalles de la actividad con fechas corregidas
-    const result = await pool.request()
-      .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          AC.id_actividad,
-          AC.titulo,
-          AC.descripcion,
-          -- 🔧 FECHAS SIN CONVERSIONES UTC
-          CONVERT(VARCHAR(19), AG.fecha_asignacion, 120) as fecha_asignacion,
-          CONVERT(VARCHAR(19), AG.fecha_entrega, 120) as fecha_entrega,
-          AG.fecha_entrega as fecha_entrega_raw,
-          'Pendiente' as estado_original,
-          I.nombre as instrumento,
-          I.valor_total as puntos_total,
-          I.id_instrumento,
-          TI.nombre_tipo as tipoInstrumento,
-          M.vchNomMateria as materia,
-          CONCAT(D.vchNombre, ' ', D.vchAPaterno, ' ', ISNULL(D.vchAMaterno, '')) AS docente,
-          CASE 
-            WHEN I.parcial = 1 THEN 'Parcial 1'
-            WHEN I.parcial = 2 THEN 'Parcial 2'
-            WHEN I.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          AC.id_modalidad,
-          CASE 
-            WHEN AC.id_modalidad = 1 THEN 'Individual'
-            WHEN AC.id_modalidad = 2 THEN 'Equipo'
-            WHEN AC.id_modalidad = 3 THEN 'Grupo'
-            ELSE 'Desconocida'
-          END as modalidad_nombre
-        FROM tbl_actividades AC
-        INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-        INNER JOIN tbl_materias M ON M.vchClvMateria = I.vchClvMateria AND M.idPeriodo = M.idPeriodo
-        INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
-        INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
-        INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
-        WHERE AC.id_actividad = @idActividad
-      `);
+      .execute('sp_obtenerDetalleActividad');
 
     if (result.recordset.length === 0) {
-      return res.status(404).json({ mensaje: 'Detalles de actividad no encontrados' });
+      return res.status(404).json({ mensaje: 'Actividad no encontrada o sin acceso' });
     }
 
     const actividad = result.recordset[0];
 
-    // 🔧 PASO 3: OBTENER OBSERVACIONES SEGÚN LA MODALIDAD
-    let observaciones = null;
-    
-    console.log(`💬 Buscando observaciones para modalidad ${modalidad}...`);
-    
-    if (modalidad === 1) {
-      // MODALIDAD INDIVIDUAL
-      const obsResult = await pool.request()
-        .input('idActividad', sql.Int, idActividad)
-        .input('matricula', sql.VarChar, matricula)
-        .query(`
-          SELECT AA.observacion
-          FROM tbl_actividad_alumno AA
-          WHERE AA.id_actividad = @idActividad 
-          AND AA.vchMatricula = @matricula
-        `);
-      
-      if (obsResult.recordset.length > 0) {
-        observaciones = obsResult.recordset[0].observacion;
-        console.log(`✅ Observaciones INDIVIDUAL encontradas: "${observaciones}"`);
-      } else {
-        console.log(`ℹ️ No se encontró registro individual para actividad ${idActividad}, alumno ${matricula}`);
-      }
-      
-    } else if (modalidad === 2) {
-      // MODALIDAD EQUIPO
-      const obsResult = await pool.request()
-        .input('idActividad', sql.Int, idActividad)
-        .input('matricula', sql.VarChar, matricula)
-        .query(`
-          SELECT AE.observacion
-          FROM tbl_actividad_equipo AE
-          INNER JOIN tbl_equipos E ON AE.id_equipo = E.id_equipo
-          INNER JOIN tbl_equipo_alumno EA ON E.id_equipo = EA.id_equipo
-          WHERE AE.id_actividad = @idActividad 
-          AND EA.vchMatricula = @matricula
-        `);
-      
-      if (obsResult.recordset.length > 0) {
-        observaciones = obsResult.recordset[0].observacion;
-        console.log(`✅ Observaciones EQUIPO encontradas: "${observaciones}"`);
-      } else {
-        console.log(`ℹ️ No se encontró registro de equipo para actividad ${idActividad}, alumno ${matricula}`);
-      }
-      
-    } else if (modalidad === 3) {
-      // MODALIDAD GRUPO - Las observaciones estarían en la actividad general o en registros específicos
-      console.log(`ℹ️ Modalidad GRUPO: las observaciones están a nivel general`);
-      observaciones = null; // Modalidad grupo normalmente no tiene observaciones individuales
+    // Verificar si hay error en el resultado del SP
+    if (actividad.resultado === 'ERROR') {
+      return res.status(404).json({ mensaje: actividad.mensaje });
     }
 
-    // 🔧 LIMPIAR Y VALIDAR OBSERVACIONES
-    if (observaciones) {
-      observaciones = observaciones.trim();
-      if (observaciones.length === 0) {
-        observaciones = null;
-      }
-    }
-
-    console.log(`💬 Observaciones finales: ${observaciones ? `"${observaciones}"` : 'null'}`);
-
-    // PASO 4: Verificar criterios
+    // PASO 2: Verificar criterios definidos usando SP
     const criteriosDefinidos = await pool.request()
       .input('idInstrumento', sql.Int, actividad.id_instrumento)
-      .query(`
-        SELECT COUNT(c.id_criterio) as total_criterios
-        FROM tbl_criterios c
-        WHERE c.id_instrumento = @idInstrumento
-      `);
+      .execute('sp_ObtenerCriteriosSinCalificar');
 
-    const totalCriteriosDefinidos = criteriosDefinidos.recordset[0]?.total_criterios || 0;
+    const totalCriteriosDefinidos = criteriosDefinidos.recordset.length;
     const instrumentoTieneCriterios = totalCriteriosDefinidos > 0;
 
-    // PASO 5: Verificar calificación
+    // PASO 3: Verificar calificación
     const calificacionReal = await obtenerCalificacionRealActividad(pool, idActividad, matricula);
     
-    // PASO 6: Manejo de criterios
+    // PASO 4: Manejo de criterios
     let rubrica = [];
     let estadoCriterios = {
       instrumento_tiene_criterios: instrumentoTieneCriterios,
@@ -1232,20 +719,7 @@ const obtenerDetalleActividad = async (req, res) => {
         estadoCriterios.mostrar_rubrica = true;
         estadoCriterios.tipo_rubrica = 'real';
       } else {
-        const criteriosSinCalificar = await pool.request()
-          .input('idInstrumento', sql.Int, actividad.id_instrumento)
-          .query(`
-            SELECT 
-              c.id_criterio,
-              c.nombre as criterio,
-              c.descripcion,
-              c.valor_maximo as puntos_maximos
-            FROM tbl_criterios c
-            WHERE c.id_instrumento = @idInstrumento
-            ORDER BY c.id_criterio
-          `);
-        
-        rubrica = criteriosSinCalificar.recordset.map(criterio => ({
+        rubrica = criteriosDefinidos.recordset.map(criterio => ({
           criterio: criterio.criterio,
           descripcion: criterio.descripcion || 'Criterio de evaluación',
           puntos: criterio.puntos_maximos,
@@ -1266,14 +740,14 @@ const obtenerDetalleActividad = async (req, res) => {
       rubrica = [];
     }
 
-    // PASO 7: Calcular estado dinámico con función corregida
+    // PASO 5: Calcular estado dinámico con función corregida
     const estadoDinamico = calcularEstadoDinamico(
       actividad.fecha_entrega_raw,
       calificacionReal !== null,
       actividad.estado_original
     );
 
-    // PASO 8: Respuesta CON OBSERVACIONES INCLUIDAS
+    // PASO 6: Respuesta CON OBSERVACIONES INCLUIDAS
     const response = {
       id_actividad: actividad.id_actividad,
       titulo: actividad.titulo,
@@ -1292,7 +766,7 @@ const obtenerDetalleActividad = async (req, res) => {
       rubrica: rubrica,
       
       // 🆕 INCLUIR OBSERVACIONES CORRECTAMENTE
-      observaciones: observaciones, // Puede ser null, string vacío, o string con contenido
+      observaciones: actividad.observaciones, // Puede ser null, string vacío, o string con contenido
       
       tiene_calificacion: calificacionReal !== null,
       calificacion_info: calificacionReal ? {
@@ -1317,11 +791,11 @@ const obtenerDetalleActividad = async (req, res) => {
         urgencia: estadoDinamico.urgencia
       },
       
-      fuente_calculo: 'FECHAS_CORREGIDAS_CON_OBSERVACIONES'
+      fuente_calculo: 'SP_DETALLE_CON_OBSERVACIONES'
     };
 
     console.log(`✅ Detalle obtenido con observaciones: ${response.titulo}`);
-    console.log(`💬 Observaciones incluidas: ${observaciones ? 'SÍ' : 'NO'}`);
+    console.log(`💬 Observaciones incluidas: ${actividad.observaciones ? 'SÍ' : 'NO'}`);
     console.log(`🔍 === FIN DETALLE ACTIVIDAD ===`);
 
     res.json(response);
@@ -1334,8 +808,9 @@ const obtenerDetalleActividad = async (req, res) => {
     });
   }
 };
+
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerActividadesEntregadas
+// 🔧 FUNCIÓN ADAPTADA: obtenerActividadesEntregadas CON SP
 // ===============================================
 const obtenerActividadesEntregadas = async (req, res) => {
   const { matricula } = req.params;
@@ -1353,51 +828,7 @@ const obtenerActividadesEntregadas = async (req, res) => {
       .input('matricula', sql.VarChar, matricula)
       .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
       .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
-      .query(`
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          CAST(a.descripcion AS NVARCHAR(MAX)) as descripcion,
-          -- 🔧 FECHAS SIN CONVERSIONES UTC
-          CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-          'Calificada' as estado,
-          ins.nombre as instrumento,
-          m.vchNomMateria as materia,
-          CASE 
-            WHEN ins.parcial = 1 THEN 'Parcial 1'
-            WHEN ins.parcial = 2 THEN 'Parcial 2'
-            WHEN ins.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          CASE 
-            WHEN a.id_modalidad = 1 THEN 'Individual'
-            WHEN a.id_modalidad = 2 THEN 'Equipo'
-            WHEN a.id_modalidad = 3 THEN 'Grupo'
-            ELSE 'Desconocida'
-          END as modalidad_tipo,
-          ROUND((SUM(eca.calificacion) * 10.0) / ins.valor_total, 2) as calificacion_real
-        FROM tbl_evaluacion_criterioActividad eca
-        INNER JOIN tbl_actividad_alumno aa ON eca.id_actividad_alumno = aa.id_actividad_alumno
-        INNER JOIN tbl_actividades a ON aa.id_actividad = a.id_actividad
-        INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-        INNER JOIN tbl_materias m ON ins.vchClvMateria = m.vchClvMateria AND ins.idPeriodo = m.idPeriodo
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        WHERE aa.vchMatricula = @matricula 
-        AND ins.vchPeriodo = @periodo_detectado
-        AND m.vchCuatrimestre = @cuatrimestre_alumno
-        GROUP BY 
-          a.id_actividad, 
-          a.titulo, 
-          CAST(a.descripcion AS NVARCHAR(MAX)), 
-          ag.fecha_entrega, 
-          ins.nombre, 
-          m.vchNomMateria, 
-          ins.parcial, 
-          a.id_modalidad, 
-          ins.valor_total
-        HAVING COUNT(eca.id_criterio) > 0
-        ORDER BY ag.fecha_entrega DESC, a.titulo ASC
-      `);
+      .execute('obtenerActividadesEntregadas');
 
     console.log(`✅ Actividades calificadas (período automático): ${result.recordset.length}`);
 
@@ -1445,7 +876,7 @@ const obtenerActividadesEntregadas = async (req, res) => {
 };
 
 // ===============================================
-// 🔧 CORRECCIÓN COMPLETA DE LA FUNCIÓN obtenerActividadEntregada
+// 🔧 ADAPTACIÓN COMPLETA DE LA FUNCIÓN obtenerActividadEntregada CON SP
 // ===============================================
 const obtenerActividadEntregada = async (req, res) => {
   const { matricula, idActividad } = req.params;
@@ -1466,94 +897,32 @@ const obtenerActividadEntregada = async (req, res) => {
       });
     }
 
-    // 🔧 CONSULTA MEJORADA CON INFORMACIÓN DE PONDERACIÓN
+    // 🔧 CONSULTA USANDO SP
     const actividadResult = await pool.request()
       .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          AC.id_actividad,
-          AC.titulo,
-          CAST(AC.descripcion AS NVARCHAR(MAX)) as descripcion,
-          AC.id_modalidad,
-          CONVERT(VARCHAR(19), AG.fecha_asignacion, 120) as fecha_asignacion,
-          CONVERT(VARCHAR(19), AG.fecha_entrega, 120) as fecha_entrega,
-          I.nombre as instrumento,
-          I.valor_total as puntos_total,
-          TI.nombre_tipo as tipoInstrumento,
-          M.vchNomMateria as materia,
-          CONCAT(D.vchNombre, ' ', D.vchAPaterno, ' ', ISNULL(D.vchAMaterno, '')) AS docente,
-          CASE 
-            WHEN I.parcial = 1 THEN 'Parcial 1'
-            WHEN I.parcial = 2 THEN 'Parcial 2'
-            WHEN I.parcial = 3 THEN 'Parcial 3'
-            ELSE 'Actividad General'
-          END as parcial,
-          -- 🆕 INFORMACIÓN DE PONDERACIÓN
-          ISNULL(VCE.valor_componente, 0) as valor_componente,
-          ISNULL(VCE.componente, 'Actividad') as tipo_componente,
-          ISNULL(VCE.parcial, I.parcial) as parcial_componente
-        FROM tbl_actividades AC
-        INNER JOIN tbl_instrumento I ON I.id_instrumento = AC.id_instrumento
-        INNER JOIN tbl_materias M ON I.vchClvMateria = M.vchClvMateria AND I.idPeriodo = M.idPeriodo
-        INNER JOIN tbl_tipo_instrumento TI ON TI.id_tipo_instrumento = I.id_tipo_instrumento
-        INNER JOIN tbl_docentes D ON D.vchClvTrabajador = AC.vchClvTrabajador
-        INNER JOIN tbl_actividad_grupo AG ON AG.id_actividad = AC.id_actividad
-        -- 🆕 JOIN CON TABLA DE PONDERACIONES
-        LEFT JOIN tbl_valor_componentes_evaluacion VCE ON AC.id_valor_componente = VCE.id_valor_componente
-        WHERE AC.id_actividad = @idActividad
-      `);
+      .input('matricula', sql.VarChar, matricula)
+      .execute('obtenerActividadEntregada');
 
     if (actividadResult.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'Actividad no encontrada' });
     }
 
-    const actividadData = actividadResult.recordset[0]; // 🔧 USAR NOMBRE CORRECTO
+    const actividadData = actividadResult.recordset[0];
+
+    // Las observaciones vienen en el segundo recordset del SP
+    let observaciones = null;
+    if (actividadResult.recordsets.length > 1 && actividadResult.recordsets[1].length > 0) {
+      observaciones = actividadResult.recordsets[1][0].observacion;
+      console.log(`✅ Observaciones encontradas: "${observaciones}"`);
+    } else {
+      console.log(`ℹ️ Sin observaciones para actividad ${idActividad}, alumno ${matricula}`);
+    }
 
     // 🆕 OBTENER TOTAL DE PUNTOS DE LA MATERIA PARA CALCULAR PORCENTAJE
     let totalPuntosMateria = 100; // Default
-    try {
-      const totalResult = await pool.request()
-        .input('idActividad', sql.Int, idActividad)
-        .query(`
-          SELECT 
-            SUM(ISNULL(VCE.valor_componente, 0)) as total_puntos_materia
-          FROM tbl_actividades A
-          INNER JOIN tbl_instrumento I ON A.id_instrumento = I.id_instrumento
-          INNER JOIN tbl_actividades A2 ON A2.id_instrumento = I.id_instrumento
-          LEFT JOIN tbl_valor_componentes_evaluacion VCE ON A2.id_valor_componente = VCE.id_valor_componente
-          WHERE A.id_actividad = @idActividad
-        `);
-      
-      if (totalResult.recordset.length > 0 && totalResult.recordset[0].total_puntos_materia > 0) {
-        totalPuntosMateria = totalResult.recordset[0].total_puntos_materia;
-      }
-    } catch (error) {
-      console.log(`⚠️ Error al obtener total de puntos: ${error.message}`);
+    if (actividadResult.recordsets.length > 2 && actividadResult.recordsets[2].length > 0) {
+      totalPuntosMateria = actividadResult.recordsets[2][0].total_puntos_materia || 100;
     }
-   // A:
-let observaciones = null;
-try {
-  const obsResult = await pool.request()
-    .input('idActividad', sql.Int, idActividad)
-    .input('matricula', sql.VarChar, matricula)
-    .query(`
-      SELECT observacion
-      FROM tbl_actividad_alumno AA
-      WHERE AA.id_actividad = @idActividad 
-      AND AA.vchMatricula = @matricula
-      AND observacion IS NOT NULL
-      AND LTRIM(RTRIM(observacion)) != ''
-    `);
-  
-  if (obsResult.recordset.length > 0) {
-    observaciones = obsResult.recordset[0].observacion;
-    console.log(`✅ Observaciones encontradas: "${observaciones}"`);
-  } else {
-    console.log(`ℹ️ Sin observaciones para actividad ${idActividad}, alumno ${matricula}`);
-  }
-} catch (obsError) {
-  console.log(`⚠️ Error al obtener observaciones: ${obsError.message}`);
-}
 
     // Obtener criterios calificados
     const criteriosCalificados = await obtenerCriteriosCalificadosReales(pool, idActividad, matricula);
@@ -1640,7 +1009,7 @@ try {
       // 🆕 INFORMACIÓN DE PONDERACIÓN
       ponderacion: ponderacionInfo,
       
-      fuente_calificacion: 'CON_PONDERACION_REAL'
+      fuente_calificacion: 'SP_CON_PONDERACION_REAL'
     };
 
     console.log(`✅ Actividad entregada: ${response.titulo}`);
@@ -1658,7 +1027,7 @@ try {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN BACKEND COMPLETA CON PONDERACIÓN EN HISTORIAL
+// 🔧 FUNCIÓN ADAPTADA: obtenerCalificacionesHistoricas CON SP
 // ===============================================
 const obtenerCalificacionesHistoricas = async (req, res) => {
   const { matricula } = req.params;
@@ -1673,307 +1042,11 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // Construir filtros dinámicos
-    let whereClause = 'WHERE 1=1';
-    
-    if (!todos_periodos || todos_periodos !== 'true') {
-      whereClause += ' AND i.vchPeriodo = @periodo_detectado';
-      whereClause += ' AND m.vchCuatrimestre = @cuatrimestre_alumno';
-      console.log(`📅 Filtrando solo período detectado: ${periodoInfo.periodo}`);
-    } else {
-      console.log(`📅 Obteniendo TODOS los períodos`);
-    }
-
-    // 🔧 CONSULTA MEJORADA: INCLUIR INFORMACIÓN COMPLETA DE PONDERACIÓN
+    // 🔧 CONSULTA MEJORADA: INCLUIR INFORMACIÓN COMPLETA DE PONDERACIÓN USANDO SP
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
-      .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
-      .input('grupo_alumno', sql.VarChar, periodoInfo.grupo)
-      .query(`
-        WITH TodasLasActividadesConPonderacion AS (
-          -- MODALIDAD 1: INDIVIDUAL
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            
-            -- 🆕 INFORMACIÓN COMPLETA DE PONDERACIÓN
-            ISNULL(vce.valor_componente, 0) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            
-            -- 🔧 CALIFICACIONES REALES O CERO
-            ISNULL((
-              SELECT SUM(eca.calificacion) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as puntos_obtenidos,
-            i.valor_total as puntos_totales,
-            
-            -- 🔧 CALIFICACIÓN SOBRE 10 O CERO
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total, 2)
-              ELSE 0 
-            END as calificacion_final,
-            
-            -- 🆕 CONTRIBUCIÓN PONDERADA CALCULADA
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) AND ISNULL(vce.valor_componente, 0) > 0 
-              THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total * ISNULL(vce.valor_componente, 0) / 10.0, 2)
-              ELSE 0 
-            END as contribucion_obtenida,
-            
-            -- 🔧 ESTADO REAL
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE 'Pendiente'
-            END as estado,
-            
-            -- 🔧 FECHA DE ENTREGA
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            
-            -- 🔧 MODALIDAD
-            CASE 
-              WHEN a.id_modalidad = 1 THEN 'Individual'
-              WHEN a.id_modalidad = 2 THEN 'Equipo'
-              WHEN a.id_modalidad = 3 THEN 'Grupo'
-              ELSE 'Desconocida'
-            END as modalidad,
-            
-            -- 🆕 CRITERIOS CALIFICADOS
-            ISNULL((
-              SELECT COUNT(*) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as criterios_calificados
-            
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE aa.vchMatricula = @matricula 
-          AND a.id_modalidad = 1
-          ${whereClause.replace('WHERE 1=1', '')}
-
-          UNION ALL
-
-          -- MODALIDAD 2: EQUIPO (estructura similar)
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            ISNULL(vce.valor_componente, 0) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            ISNULL((
-              SELECT SUM(eca.calificacion) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as puntos_obtenidos,
-            i.valor_total as puntos_totales,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total, 2)
-              ELSE 0 
-            END as calificacion_final,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) AND ISNULL(vce.valor_componente, 0) > 0 
-              THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total * ISNULL(vce.valor_componente, 0) / 10.0, 2)
-              ELSE 0 
-            END as contribucion_obtenida,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE 'Pendiente'
-            END as estado,
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            CASE 
-              WHEN a.id_modalidad = 1 THEN 'Individual'
-              WHEN a.id_modalidad = 2 THEN 'Equipo'
-              WHEN a.id_modalidad = 3 THEN 'Grupo'
-              ELSE 'Desconocida'
-            END as modalidad,
-            ISNULL((
-              SELECT COUNT(*) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as criterios_calificados
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
-          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-          INNER JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE ea.vchMatricula = @matricula 
-          AND a.id_modalidad = 2
-          ${whereClause.replace('WHERE 1=1', '')}
-
-          UNION ALL
-
-          -- MODALIDAD 3: GRUPO (estructura similar)
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            ISNULL(vce.valor_componente, 0) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            ISNULL((
-              SELECT SUM(eca.calificacion) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as puntos_obtenidos,
-            i.valor_total as puntos_totales,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total, 2)
-              ELSE 0 
-            END as calificacion_final,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) AND ISNULL(vce.valor_componente, 0) > 0 
-              THEN ROUND((
-                SELECT SUM(eca.calificacion) 
-                FROM tbl_evaluacion_criterioActividad eca
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) * 10.0 / i.valor_total * ISNULL(vce.valor_componente, 0) / 10.0, 2)
-              ELSE 0 
-            END as contribucion_obtenida,
-            CASE 
-              WHEN EXISTS (
-                SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-                WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-              ) THEN 'Calificada'
-              ELSE 'Pendiente'
-            END as estado,
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            CASE 
-              WHEN a.id_modalidad = 1 THEN 'Individual'
-              WHEN a.id_modalidad = 2 THEN 'Equipo'
-              WHEN a.id_modalidad = 3 THEN 'Grupo'
-              ELSE 'Desconocida'
-            END as modalidad,
-            ISNULL((
-              SELECT COUNT(*) 
-              FROM tbl_evaluacion_criterioActividad eca
-              INNER JOIN tbl_actividad_alumno aa_cal ON eca.id_actividad_alumno = aa_cal.id_actividad_alumno
-              WHERE aa_cal.id_actividad = a.id_actividad AND aa_cal.vchMatricula = @matricula
-            ), 0) as criterios_calificados
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE g.vchGrupo = @grupo_alumno 
-          AND a.id_modalidad = 3
-          ${whereClause.replace('WHERE 1=1', '')}
-        )
-        SELECT *
-        FROM TodasLasActividadesConPonderacion
-        ORDER BY periodo DESC, materia, parcial, fecha_entrega
-      `);
+      .input('todos_periodos', sql.Bit, todos_periodos === 'true' ? 1 : 0)
+      .execute('sp_ObtenerCalificacionesHistoricas');
 
     console.log(`📊 Actividades encontradas (con ponderación): ${result.recordset.length}`);
 
@@ -2113,181 +1186,18 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // Construir filtros dinámicos
-    let whereClause = '';
-    
-    if (!todos_periodos || todos_periodos !== 'true') {
-      whereClause = `AND i.vchPeriodo = @periodo_detectado AND m.vchCuatrimestre = @cuatrimestre_alumno`;
-      console.log(`📅 Filtrando solo período detectado: ${periodoInfo.periodo}`);
-    } else {
-      console.log(`📅 Obteniendo TODOS los períodos`);
-    }
-
-    // 🔧 PRIMERA CONSULTA: OBTENER **TODAS** LAS ACTIVIDADES QUE EXISTEN
+    // 🔧 PRIMERA CONSULTA: OBTENER **TODAS** LAS ACTIVIDADES QUE EXISTEN USANDO SP
     const todasLasActividades = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .input('periodo_detectado', sql.VarChar, periodoInfo.periodo)
-      .input('cuatrimestre_alumno', sql.VarChar, periodoInfo.cuatrimestre)
-      .input('grupo_alumno', sql.VarChar, periodoInfo.grupo)
-      .query(`
-        WITH ActividadesUnicas AS (
-          -- MODALIDAD 1: INDIVIDUAL
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            ISNULL(vce.valor_componente, 2) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            -- 🆕 INCLUIR FECHA DE ENTREGA PARA EVALUACIÓN DE VENCIMIENTO
-            ag.fecha_entrega as fecha_entrega_raw,
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            'Individual' as modalidad,
-            a.id_modalidad,
-            1 as prioridad
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_actividad_alumno aa ON a.id_actividad = aa.id_actividad
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE aa.vchMatricula = @matricula 
-          AND i.vchPeriodo = @periodo_detectado
-          AND m.vchCuatrimestre = @cuatrimestre_alumno
-          AND a.id_modalidad = 1
-
-          UNION ALL
-
-          -- MODALIDAD 2: EQUIPO
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            ISNULL(vce.valor_componente, 2) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            ag.fecha_entrega as fecha_entrega_raw,
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            'Equipo' as modalidad,
-            a.id_modalidad,
-            2 as prioridad
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
-          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-          INNER JOIN tbl_equipo_alumno ea_alumno ON e.id_equipo = ea_alumno.id_equipo
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE ea_alumno.vchMatricula = @matricula 
-          AND i.vchPeriodo = @periodo_detectado
-          AND m.vchCuatrimestre = @cuatrimestre_alumno
-          AND a.id_modalidad = 2
-
-          UNION ALL
-
-          -- MODALIDAD 3: GRUPO
-          SELECT 
-            a.id_actividad,
-            a.titulo,
-            m.vchNomMateria as materia,
-            i.vchPeriodo as periodo,
-            CASE 
-              WHEN i.parcial = 1 THEN 'Parcial 1'
-              WHEN i.parcial = 2 THEN 'Parcial 2'
-              WHEN i.parcial = 3 THEN 'Parcial 3'
-              ELSE 'Actividad General'
-            END as parcial,
-            ins.nombre as instrumento,
-            ti.nombre_tipo as tipoInstrumento,
-            CONCAT(d.vchNombre, ' ', d.vchAPaterno, ' ', ISNULL(d.vchAMaterno, '')) AS Docente,
-            ISNULL(vce.valor_componente, 2) as valor_componente,
-            ISNULL(vce.componente, 'Actividad') as tipo_componente,
-            ag.fecha_entrega as fecha_entrega_raw,
-            CONVERT(VARCHAR(19), ag.fecha_entrega, 120) as fecha_entrega,
-            'Grupo' as modalidad,
-            a.id_modalidad,
-            3 as prioridad
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria AND i.idPeriodo = m.idPeriodo
-          INNER JOIN tbl_instrumento ins ON a.id_instrumento = ins.id_instrumento
-          INNER JOIN tbl_tipo_instrumento ti ON i.id_tipo_instrumento = ti.id_tipo_instrumento
-          INNER JOIN tbl_docentes d ON d.vchClvTrabajador = a.vchClvTrabajador
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-          LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-          WHERE g.vchGrupo = @grupo_alumno 
-          AND i.vchPeriodo = @periodo_detectado
-          AND m.vchCuatrimestre = @cuatrimestre_alumno
-          AND a.id_modalidad = 3
-        ),
-        ActividadesSinDuplicados AS (
-          SELECT 
-            id_actividad,
-            titulo,
-            materia,
-            periodo,
-            parcial,
-            instrumento,
-            tipoInstrumento,
-            Docente,
-            valor_componente,
-            tipo_componente,
-            fecha_entrega_raw,
-            fecha_entrega,
-            modalidad,
-            id_modalidad,
-            ROW_NUMBER() OVER (PARTITION BY id_actividad ORDER BY prioridad) as rn
-          FROM ActividadesUnicas
-        )
-        SELECT *
-        FROM ActividadesSinDuplicados
-        WHERE rn = 1
-        ORDER BY periodo DESC, materia, parcial, fecha_entrega
-      `);
+      .input('todos_periodos', sql.Bit, todos_periodos === 'true' ? 1 : 0)
+      .execute('sp_ObtenerCalificacionesHistoricasPorParciales');
 
     console.log(`📊 TODAS las actividades encontradas: ${todasLasActividades.recordset.length}`);
 
-    // 🔧 SEGUNDA CONSULTA: OBTENER **SOLO** LAS CALIFICACIONES EXISTENTES
+    // 🔧 SEGUNDA CONSULTA: OBTENER **SOLO** LAS CALIFICACIONES EXISTENTES USANDO SP
     const calificacionesExistentes = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT 
-          a.id_actividad,
-          ROUND(SUM(eca.calificacion) * 10.0 / i.valor_total, 2) as calificacion_obtenida,
-          COUNT(eca.id_criterio) as criterios_calificados
-        FROM tbl_evaluacion_criterioActividad eca
-        INNER JOIN tbl_actividad_alumno aa ON eca.id_actividad_alumno = aa.id_actividad_alumno
-        INNER JOIN tbl_actividades a ON aa.id_actividad = a.id_actividad
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        WHERE aa.vchMatricula = @matricula
-        GROUP BY a.id_actividad, i.valor_total
-      `);
+      .execute('sp_ObtenerCalificacionesExistentes');
 
     console.log(`📊 Calificaciones existentes: ${calificacionesExistentes.recordset.length}`);
 
@@ -2598,7 +1508,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
 };
 
 // ===============================================
-// FUNCIÓN SIN CAMBIOS: cambiarContrasena
+// FUNCIÓN ADAPTADA: cambiarContrasena CON SP
 // ===============================================
 const cambiarContrasena = async (req, res) => {
   const { matricula } = req.params;
@@ -2609,27 +1519,26 @@ const cambiarContrasena = async (req, res) => {
 
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
-      .query(`
-        SELECT vchContrasenia 
-        FROM dbo.tblAlumnos 
-        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
-      `);
+      .input('contrasena_actual', sql.VarChar, actual)
+      .input('contrasena_nueva', sql.VarChar, nueva)
+      .output('resultado', sql.Int)
+      .execute('sp_CambiarContrasena');
 
-    const alumno = result.recordset[0];
-    if (!alumno || alumno.vchContrasenia !== actual) {
-      return res.status(400).json({ mensaje: 'Contraseña actual incorrecta' });
+    const resultado = result.output.resultado;
+
+    switch (resultado) {
+      case 0:
+        res.json({ mensaje: 'Contraseña actualizada correctamente' });
+        break;
+      case 1:
+        res.status(400).json({ mensaje: 'Contraseña actual incorrecta' });
+        break;
+      case 2:
+        res.status(404).json({ mensaje: 'Alumno no encontrado' });
+        break;
+      default:
+        res.status(500).json({ mensaje: 'Error desconocido' });
     }
-
-    await pool.request()
-      .input('matricula', sql.VarChar, matricula)
-      .input('nueva', sql.VarChar, nueva)
-      .query(`
-        UPDATE dbo.tblAlumnos 
-        SET vchContrasenia = @nueva 
-        WHERE RTRIM(vchMatricula) = RTRIM(@matricula)
-      `);
-
-    res.json({ mensaje: 'Contraseña actualizada correctamente' });
 
   } catch (err) {
     console.error('❌ Error al cambiar contraseña:', err);
