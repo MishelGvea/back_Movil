@@ -11,19 +11,13 @@ const obtenerDatosDocente = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
-      .query(`
-        SELECT TOP 1 
-          vchNombre + ' ' + vchAPaterno + ' ' + vchAMaterno AS nombre
-        FROM dbo.tbl_docentes
-        WHERE RTRIM(vchClvTrabajador) = RTRIM(@clave)
-      `);
+      .execute('sp_ObtenerDatosDocente'); // ← Ejecutar el procedimiento
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'Docente no encontrado' });
     }
 
     res.json({ nombre: result.recordset[0].nombre });
-
   } catch (err) {
     console.error('❌ Error al obtener datos del docente:', err);
     res.status(500).json({ mensaje: 'Error en el servidor' });
@@ -38,16 +32,7 @@ const obtenerPerfilDocente = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
-      .query(`
-        SELECT DISTINCT 
-          RTRIM(d.vchNombre) + ' ' + RTRIM(d.vchAPaterno) + ' ' + RTRIM(d.vchAMaterno) AS nombreCompleto,
-          m.vchClvMateria AS claveMateria,
-          m.vchNomMateria AS nombreMateria
-        FROM dbo.tbl_docentes d
-        JOIN dbo.tbl_docente_materia dm ON RTRIM(d.vchClvTrabajador) = RTRIM(dm.vchClvTrabajador)
-        JOIN dbo.tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
-        WHERE RTRIM(d.vchClvTrabajador) = RTRIM(@clave)
-      `);
+      .execute(`sp_obtenerPerfilDocente`);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'Docente no encontrado' });
@@ -68,14 +53,7 @@ const obtenerMateriasPorDocente = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
-      .query(`
-        SELECT DISTINCT
-          m.vchClvMateria,
-          m.vchNomMateria AS nombreMateria
-        FROM tbl_docente_materia dm
-        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
-        WHERE dm.vchClvTrabajador = @clave
-      `);
+      .execute(`sp_ObtenerMateriasPorDocente`);
 
     res.json(result.recordset);
   } catch (err) {
@@ -92,11 +70,7 @@ const obtenerMateriasCompletas = async (req, res) => {
     const pool = await sql.connect(config);
     
     // Obtener el periodo más reciente (actual) desde la base de datos
-    const periodoActualResult = await pool.request().query(`
-      SELECT TOP 1 Periodo 
-      FROM tbl_docente_materia 
-      ORDER BY Periodo DESC
-    `);
+    const periodoActualResult = await pool.request().execute(`sp_ObtenerPeriodoActual`);
     
     if (periodoActualResult.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'No se encontraron periodos asignados' });
@@ -108,26 +82,7 @@ const obtenerMateriasCompletas = async (req, res) => {
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .input('periodoActual', sql.VarChar, periodoActual)
-      .query(`
-        SELECT DISTINCT
-          m.vchClvMateria,
-          m.vchNomMateria AS nombreMateria,
-          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
-          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos,
-          dm.vchCuatrimestre,
-          dm.Periodo
-        FROM tbl_docente_materia dm
-        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
-        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
-        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
-        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
-          AND a.vchClvCuatri = dm.vchCuatrimestre
-          AND a.vchPeriodo = dm.Periodo
-        WHERE dm.vchClvTrabajador = @clave
-          AND dm.Periodo = @periodoActual
-        GROUP BY m.vchClvMateria, m.vchNomMateria, dm.vchCuatrimestre, dm.Periodo
-        ORDER BY m.vchNomMateria
-      `);
+      .execute(`sp_obtenerMateriasCompletas`);
 
     console.log(`✅ Encontradas ${result.recordset.length} materias del periodo actual (${periodoActual})`);
     
@@ -151,11 +106,7 @@ const obtenerPeriodoActual = async (req, res) => {
     const pool = await sql.connect(config);
     
     // Obtener el periodo más reciente
-    const periodoResult = await pool.request().query(`
-      SELECT TOP 1 Periodo 
-      FROM tbl_docente_materia 
-      ORDER BY Periodo DESC
-    `);
+    const periodoResult = await pool.request().query(`EXEC sp_ObtenerPeriodoActual;`);
     
     if (periodoResult.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'No se encontraron periodos' });
@@ -171,9 +122,7 @@ const obtenerPeriodoActual = async (req, res) => {
     const cuatrimestreInfo = await pool.request()
       .input('idPeriodo', sql.Int, parseInt(cuatrimestreNumero))
       .query(`
-        SELECT mesInicia, mesTermina 
-        FROM tbl_periodos 
-        WHERE idPeriodo = @idPeriodo
+        EXEC sp_CuatrimestreInfo
       `);
 
     const infoCompleta = {
@@ -206,36 +155,7 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .input('clvMateria', sql.VarChar, clvMateria)
-      .query(`
-        SELECT 
-          g.id_grupo AS idGrupo,
-          g.vchGrupo,
-          COUNT(DISTINCT a_alumnos.vchMatricula) AS totalAlumnos,
-          -- 🆕 AGREGAR ESTA LÍNEA
-          COUNT(DISTINCT act.id_actividad) AS totalActividades
-        FROM dbo.tbl_docente_materia AS dm
-        JOIN dbo.tbl_docente_materia_grupo AS dmg 
-          ON dm.idDocenteMateria = dmg.id_DocenteMateria
-        JOIN dbo.tbl_grupos AS g 
-          ON dmg.id_grupo = g.id_grupo
-        LEFT JOIN dbo.tblAlumnos AS a_alumnos 
-          ON a_alumnos.chvGrupo = g.id_grupo
-          AND a_alumnos.vchClvCuatri = dm.vchCuatrimestre
-          AND a_alumnos.vchPeriodo = dm.Periodo
-        -- 🆕 AGREGAR ESTOS JOINS
-        LEFT JOIN dbo.tbl_actividad_grupo AS ag 
-          ON ag.id_grupo = g.id_grupo
-        LEFT JOIN dbo.tbl_actividades AS act 
-          ON ag.id_actividad = act.id_actividad
-        LEFT JOIN dbo.tbl_instrumento AS i 
-          ON act.id_instrumento = i.id_instrumento
-          AND i.vchClvTrabajador = dm.vchClvTrabajador
-          AND i.vchClvMateria = dm.vchClvMateria
-        WHERE dm.vchClvTrabajador = @clave
-          AND dm.vchClvMateria = @clvMateria
-        GROUP BY g.id_grupo, g.vchGrupo
-        ORDER BY g.vchGrupo
-      `);
+      .execute(`sp_ObtenerGruposPorMateriaDocente`);
 
     res.json(result.recordset);
   } catch (err) {
@@ -261,22 +181,7 @@ const obtenerComponentesPorMateria = async (req, res) => {
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT 
-          id_valor_componente,
-          componente AS nombre_componente,
-          valor_componente,
-          vchClvMateria,
-          parcial,
-          vchPeriodo,
-          vchClvTrabajador
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-        ORDER BY id_valor_componente
-      `);
+      .execute(`sp_ObtenerComponentesMateria`);
 
     // Calcular suma total de valores
     const sumaTotal = result.recordset.reduce((suma, comp) => suma + (comp.valor_componente || 0), 0);
@@ -349,16 +254,7 @@ const crearComponente = async (req, res) => {
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT 
-          ISNULL(SUM(valor_componente), 0) as sumaActual,
-          COUNT(*) as totalComponentes
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
+      .execute(`sp_sumaComponentes`);
 
     const sumaActual = sumaActualResult.recordset[0].sumaActual;
     const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
@@ -412,17 +308,7 @@ const crearComponente = async (req, res) => {
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
-      .query(`
-        SELECT 
-          COUNT(*) as existe,
-          MAX(componente) as nombreExistente
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-          AND LTRIM(RTRIM(UPPER(componente))) = LTRIM(RTRIM(UPPER(@nombreComponente)))
-      `);
+      .execute(`sp_existeResult`);
 
     if (existeResult.recordset[0].existe > 0) {
       return res.status(400).json({ 
@@ -443,16 +329,7 @@ const crearComponente = async (req, res) => {
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .input('valorComponente', sql.Decimal(4,2), valor)
-      .query(`
-        INSERT INTO tbl_valor_componentes_evaluacion (
-          vchClvMateria, parcial, vchClvTrabajador, 
-          vchPeriodo, componente, valor_componente
-        )
-        VALUES (
-          @claveMateria, @parcial, @claveDocente, 
-          @vchPeriodo, @nombreComponente, @valorComponente
-        )
-      `);
+      .execute(`sp_InsertarComponenteEvaluacion`);
 
     console.log(`✅ Componente creado: ${nombreComponente} - ${valor}%`);
     console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
@@ -527,13 +404,7 @@ const modificarComponente = async (req, res) => {
     // 2. 🔍 OBTENER DATOS ACTUALES DEL COMPONENTE
     const componenteActualResult = await pool.request()
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        SELECT 
-          vchClvMateria, parcial, vchClvTrabajador, vchPeriodo,
-          componente, valor_componente
-        FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
+      .execute(`sp_componenteActualResult`);
 
     if (componenteActualResult.recordset.length === 0) {
       return res.status(404).json({ error: 'Componente no encontrado' });
@@ -544,13 +415,7 @@ const modificarComponente = async (req, res) => {
     // 3. 🚨 VERIFICAR SI EL COMPONENTE ESTÁ SIENDO USADO EN ACTIVIDADES
     const actividadesResult = await pool.request()
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        SELECT 
-          COUNT(*) as totalActividades,
-          STRING_AGG(a.titulo, ', ') as titulosActividades
-        FROM tbl_actividades a
-        WHERE a.id_valor_componente = @idComponente
-      `);
+      .execute(`sp_actividadesResult`);
 
     const { totalActividades, titulosActividades } = actividadesResult.recordset[0];
 
@@ -584,17 +449,7 @@ const modificarComponente = async (req, res) => {
       .input('vchPeriodo', sql.VarChar, componenteActual.vchPeriodo)
       .input('claveDocente', sql.VarChar, componenteActual.vchClvTrabajador)
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        SELECT 
-          ISNULL(SUM(valor_componente), 0) as sumaOtros,
-          COUNT(*) as otrosComponentes
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-          AND id_valor_componente != @idComponente
-      `);
+      .execute(`sp_sumaOtrosResult`);
 
     const sumaOtros = sumaOtrosResult.recordset[0].sumaOtros;
     const nuevaSuma = parseFloat((sumaOtros + valor).toFixed(2));
@@ -623,16 +478,7 @@ const modificarComponente = async (req, res) => {
         .input('claveDocente', sql.VarChar, componenteActual.vchClvTrabajador)
         .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
         .input('idComponente', sql.Int, parseInt(idComponente))
-        .query(`
-          SELECT COUNT(*) as existe
-          FROM tbl_valor_componentes_evaluacion
-          WHERE vchClvMateria = @claveMateria 
-            AND parcial = @parcial 
-            AND vchPeriodo = @vchPeriodo 
-            AND vchClvTrabajador = @claveDocente
-            AND LTRIM(RTRIM(UPPER(componente))) = LTRIM(RTRIM(UPPER(@nombreComponente)))
-            AND id_valor_componente != @idComponente
-        `);
+        .execute(`sp_verificarNombre`);
 
       if (existeResult.recordset[0].existe > 0) {
         return res.status(400).json({ 
@@ -646,12 +492,7 @@ const modificarComponente = async (req, res) => {
       .input('idComponente', sql.Int, parseInt(idComponente))
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .input('valorComponente', sql.Decimal(4,2), valor)
-      .query(`
-        UPDATE tbl_valor_componentes_evaluacion 
-        SET componente = @nombreComponente,
-            valor_componente = @valorComponente
-        WHERE id_valor_componente = @idComponente
-      `);
+      .execute(`sp_ActualizarComponente`);
 
     console.log(`✅ Componente modificado: ${nombreComponente} - ${valor}%`);
     
@@ -706,13 +547,7 @@ const eliminarComponente = async (req, res) => {
     // 1. 🔍 VERIFICAR QUE EL COMPONENTE EXISTE
     const componenteResult = await pool.request()
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        SELECT 
-          componente, valor_componente,
-          vchClvMateria, parcial, vchClvTrabajador, vchPeriodo
-        FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
+      .execute(`sp_ComponenteResult`);
 
     if (componenteResult.recordset.length === 0) {
       return res.status(404).json({ error: 'Componente no encontrado' });
@@ -723,14 +558,7 @@ const eliminarComponente = async (req, res) => {
     // 2. 🚨 VERIFICACIÓN CRÍTICA: ACTIVIDADES ASOCIADAS
     const actividadesResult = await pool.request()
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        SELECT 
-          COUNT(*) as totalActividades,
-          STRING_AGG(a.titulo, ', ') as titulosActividades,
-          STRING_AGG(CAST(a.id_actividad AS VARCHAR), ',') as idsActividades
-        FROM tbl_actividades a
-        WHERE a.id_valor_componente = @idComponente
-      `);
+      .execute(`sp_actividadesResult`);
 
     const { totalActividades, titulosActividades, idsActividades } = actividadesResult.recordset[0];
 
@@ -758,16 +586,7 @@ const eliminarComponente = async (req, res) => {
       .input('parcial', sql.Int, componente.parcial)
       .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)
       .input('claveDocente', sql.VarChar, componente.vchClvTrabajador)
-      .query(`
-        SELECT 
-          ISNULL(SUM(valor_componente), 0) as sumaTotal,
-          COUNT(*) as totalComponentes
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
+      .execute(`sp_sumaActualResult`);
 
     const sumaActual = sumaActualResult.recordset[0].sumaTotal;
     const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
@@ -793,10 +612,7 @@ const eliminarComponente = async (req, res) => {
     // 6. 🗑️ PROCEDER CON LA ELIMINACIÓN
     await pool.request()
       .input('idComponente', sql.Int, parseInt(idComponente))
-      .query(`
-        DELETE FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
+      .execute(`sp_EliminarComponenteEvaluacion`);
 
     console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente}%`);
     console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
@@ -858,20 +674,7 @@ const validarComplecionParcial = async (req, res) => {
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT 
-          COUNT(*) as totalComponentes,
-          ISNULL(SUM(valor_componente), 0) as sumaTotal,
-          STRING_AGG(CONCAT(componente, ' (', valor_componente, '%)'), ', ') as detalleComponentes,
-          MIN(valor_componente) as menorValor,
-          MAX(valor_componente) as mayorValor,
-          AVG(valor_componente) as promedioValor
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
+      .execute(`sp_ValidarComplecionParcial`);
 
     const datos = result.recordset[0];
     const sumaTotal = parseFloat(datos.sumaTotal.toFixed(2));
@@ -882,15 +685,7 @@ const validarComplecionParcial = async (req, res) => {
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT COUNT(DISTINCT a.id_actividad) as totalActividades
-        FROM tbl_actividades a
-        INNER JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-        WHERE vce.vchClvMateria = @claveMateria 
-          AND vce.parcial = @parcial 
-          AND vce.vchPeriodo = @vchPeriodo 
-          AND vce.vchClvTrabajador = @claveDocente
-      `);
+      .execute(`sp_VerificarActividadesConComponentes`);
 
     const totalActividades = actividadesResult.recordset[0].totalActividades;
 
@@ -1065,23 +860,7 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
     // Estadísticas por parcial
     const estadisticasParciales = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT 
-          vchClvMateria,
-          parcial,
-          COUNT(*) as totalComponentes,
-          SUM(valor_componente) as sumaTotal,
-          CASE 
-            WHEN SUM(valor_componente) = 100 THEN 'completo'
-            WHEN SUM(valor_componente) > 100 THEN 'excedido'
-            WHEN SUM(valor_componente) < 50 THEN 'muy_incompleto'
-            ELSE 'incompleto'
-          END as estado
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvTrabajador = @claveDocente
-        GROUP BY vchClvMateria, parcial
-        ORDER BY vchClvMateria, parcial
-      `);
+      .execute(`sp_obtenerEstadisticasGeneralesDocente`);
 
     // Resumen general
     const resumen = {
@@ -1132,80 +911,39 @@ const clonarComponentesParcial = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    // Verificar que el parcial origen tenga componentes
-    const componentesOrigenResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (hace todo: verifica, valida y clona)
+    const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialOrigen', sql.Int, parcialOrigen)
-      .input('vchPeriodo', sql.VarChar, periodo)
-      .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT componente, valor_componente
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcialOrigen 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
-
-    if (componentesOrigenResult.recordset.length === 0) {
-      return res.status(400).json({ 
-        error: `El parcial ${parcialOrigen} no tiene componentes para clonar` 
-      });
-    }
-
-    // Verificar que el parcial destino esté vacío
-    const componentesDestinoResult = await pool.request()
-      .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialDestino', sql.Int, parcialDestino)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('periodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT COUNT(*) as existe
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcialDestino 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
+      .execute('sp_componentesClonados');
 
-    if (componentesDestinoResult.recordset[0].existe > 0) {
+    const respuesta = result.recordset[0];
+
+    // 🎯 MANEJAR RESPUESTA DEL STORED PROCEDURE
+    if (respuesta.resultado === 'ERROR') {
       return res.status(400).json({ 
-        error: `El parcial ${parcialDestino} ya tiene componentes. Elimínalos primero.` 
+        error: respuesta.mensaje,
+        componentesClonados: respuesta.componentesClonados || 0
       });
     }
 
-    // Clonar componentes
-    const componentesClonados = [];
-    for (const componente of componentesOrigenResult.recordset) {
-      await pool.request()
-        .input('claveMateria', sql.VarChar, claveMateria)
-        .input('parcialDestino', sql.Int, parcialDestino)
-        .input('claveDocente', sql.VarChar, claveDocente)
-        .input('vchPeriodo', sql.VarChar, periodo)
-        .input('nombreComponente', sql.NVarChar, componente.componente)
-        .input('valorComponente', sql.Decimal(4,2), componente.valor_componente)
-        .query(`
-          INSERT INTO tbl_valor_componentes_evaluacion (
-            vchClvMateria, parcial, vchClvTrabajador, 
-            vchPeriodo, componente, valor_componente
-          )
-          VALUES (
-            @claveMateria, @parcialDestino, @claveDocente, 
-            @vchPeriodo, @nombreComponente, @valorComponente
-          )
-        `);
+    // ✅ CASO EXITOSO: Procesar los componentes clonados
+    const componentesClonados = result.recordset.map(componente => ({
+      nombre: componente.nombre || componente.componente,
+      valor: componente.valor || componente.valor_componente
+    }));
 
-      componentesClonados.push({
-        nombre: componente.componente,
-        valor: componente.valor_componente
-      });
-    }
+    // 🧮 CALCULAR SUMA TOTAL
+    const sumaTotal = componentesClonados.reduce((sum, c) => sum + parseFloat(c.valor || 0), 0);
 
     res.json({
-      mensaje: `✅ Componentes clonados de Parcial ${parcialOrigen} a Parcial ${parcialDestino}`,
+      mensaje: respuesta.mensaje,
       componentesClonados,
       total: componentesClonados.length,
-      sumaTotal: componentesClonados.reduce((sum, c) => sum + c.valor, 0)
+      sumaTotal: parseFloat(sumaTotal.toFixed(2))
     });
 
   } catch (error) {
@@ -1226,20 +964,7 @@ const validarSumaComponentes = async (req, res) => {
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .query(`
-        SELECT 
-          COUNT(*) as totalComponentes,
-          ISNULL(SUM(valor_componente), 0) as sumaTotal,
-          STRING_AGG(
-            CONCAT(componente, ' (', valor_componente, '%)'), 
-            ', '
-          ) as detalleComponentes
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvMateria = @claveMateria 
-          AND parcial = @parcial 
-          AND vchPeriodo = @vchPeriodo 
-          AND vchClvTrabajador = @claveDocente
-      `);
+      .execute(`sp_validarSumaComponentes`);
 
     const datos = result.recordset[0];
     const sumaTotal = parseFloat(datos.sumaTotal.toFixed(2));
@@ -1277,18 +1002,7 @@ const obtenerComponentesParaDropdown = async (req, res) => {
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
       .input('vchPeriodo', sql.VarChar, periodo)
-      .query(`
-        SELECT 
-          id_valor_componente,
-          componente as nombre_componente,
-          valor_componente
-        FROM tbl_valor_componentes_evaluacion
-        WHERE vchClvTrabajador = @claveDocente
-          AND vchClvMateria = @claveMateria
-          AND parcial = @parcial
-          AND vchPeriodo = @vchPeriodo
-        ORDER BY componente
-      `);
+      .execute(`sp_obtenerComponentesParaDropdown`);
 
     res.json(result.recordset);
   } catch (error) {
@@ -1329,21 +1043,16 @@ const crearActividadCompletaConComponente = async (req, res) => {
     equiposPorGrupo = {}
   } = req.body;
 
-  const transaction = new sql.Transaction();
-
   try {
     const pool = await sql.connect(config);
-    await transaction.begin();
     
-    console.log('🚀 Iniciando creación de actividad...');
+    console.log('🚀 Iniciando creación de actividad con SP principal...');
     console.log('📅 fechaEntrega recibida del frontend:', fechaEntrega);
 
     // ===============================================
-    // 🇲🇽 PASO 1: PROCESAR FECHA COMO HORA LOCAL 
+    // 🇲🇽 PASO 1: PROCESAR FECHAS COMO HORA LOCAL 
     // ===============================================
-    let fechaEntregaParaSQL;
-    let fechaCreacionParaSQL;
-    let fechaAsignacionParaSQL;
+    let fechaEntregaParaSQL, fechaCreacionParaSQL, fechaAsignacionParaSQL;
 
     try {
       const ahoraCDMX = new Date();
@@ -1353,22 +1062,8 @@ const crearActividadCompletaConComponente = async (req, res) => {
         
         if (match) {
           const [, año, mes, dia, hora, minuto] = match;
-          
-          fechaEntregaParaSQL = new Date(
-            parseInt(año),
-            parseInt(mes) - 1,
-            parseInt(dia),
-            parseInt(hora),
-            parseInt(minuto),
-            0,
-            0
-          );
-          
-          console.log('✅ Procesamiento de fecha:');
-          console.log(`   📅 Recibida del frontend: ${fechaEntrega}`);
-          console.log(`   📅 Fecha JS creada: ${fechaEntregaParaSQL}`);
-          console.log(`   🕐 Hora final: ${fechaEntregaParaSQL.getHours()}:${fechaEntregaParaSQL.getMinutes()}`);
-          
+          fechaEntregaParaSQL = new Date(parseInt(año), parseInt(mes) - 1, parseInt(dia), parseInt(hora), parseInt(minuto), 0, 0);
+          console.log('✅ Fecha procesada:', fechaEntregaParaSQL);
         } else {
           throw new Error(`Formato de fecha inválido: ${fechaEntrega}`);
         }
@@ -1384,7 +1079,6 @@ const crearActividadCompletaConComponente = async (req, res) => {
       }
       
     } catch (error) {
-      await transaction.rollback();
       return res.status(400).json({
         error: 'Error al procesar fechas',
         fechaRecibida: fechaEntrega,
@@ -1396,380 +1090,208 @@ const crearActividadCompletaConComponente = async (req, res) => {
     // VALIDACIONES
     // ===============================================
     if (!idInstrumento || !idValorComponente) {
-      await transaction.rollback();
       return res.status(400).json({ 
         error: 'Faltan datos requeridos (instrumento o componente)'
       });
     }
 
     // ===============================================
-    // 🇲🇽 PASO 2: CREAR ACTIVIDAD CON FECHAS LOCALES
+    // 🚀 PASO 2: USAR SP PRINCIPAL (hace el 80% del trabajo)
     // ===============================================
-    const numeroResult = await transaction.request().query(`
-      SELECT ISNULL(MAX(numero_actividad), 0) + 1 AS siguiente FROM tbl_actividades
-    `);
-    const numeroActividad = numeroResult.recordset[0].siguiente;
+    console.log('🎯 Ejecutando SP principal que maneja actividad + grupos + modalidad individual...');
 
-    const fechaCreacionString = formatearFechaParaSQL(fechaCreacionParaSQL);
-    console.log(`🔧 Fecha creación como string SIN UTC: ${fechaCreacionString}`);
+    // Formatear fechas para SQL Server (formato que espera el SP)
+    const fechaCreacionString = fechaCreacionParaSQL.toISOString().slice(0, 19).replace('T', ' ');
+    const fechaAsignacionString = fechaAsignacionParaSQL.toISOString().slice(0, 19).replace('T', ' ');
+    const fechaEntregaString = fechaEntregaParaSQL.toISOString().slice(0, 19).replace('T', ' ');
 
-    // 🔧 ELIMINAR REFERENCIAS A id_estado_actividad
-    await transaction.request()
+    const resultadoPrincipal = await pool.request()
       .input('titulo', sql.NVarChar, titulo)
       .input('descripcion', sql.NVarChar, descripcion)
       .input('fechaCreacion', sql.VarChar, fechaCreacionString)
-      .input('docente', sql.VarChar, claveDocente)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('claveMateria', sql.VarChar, claveMateria)
       .input('idInstrumento', sql.Int, idInstrumento)
       .input('idValorComponente', sql.Int, idValorComponente)
-      .input('numero', sql.Int, numeroActividad)
       .input('modalidad', sql.Int, modalidad)
-      .query(`
-        INSERT INTO tbl_actividades (
-          titulo, descripcion, fecha_creacion, vchClvTrabajador,
-          id_instrumento, id_valor_componente, 
-          numero_actividad, id_modalidad
-        )
-        VALUES (@titulo, @descripcion, CAST(@fechaCreacion AS DATETIME), @docente, 
-                @idInstrumento, @idValorComponente, @numero, @modalidad)
-      `);
+      .input('grupos', sql.VarChar, grupos.join(','))
+      .input('fechaAsignacion', sql.VarChar, fechaAsignacionString)
+      .input('fechaEntrega', sql.VarChar, fechaEntregaString)
+      .execute('sp_numeroResult');
 
-    // Obtener ID de actividad
-    const actividadResult = await transaction.request()
-      .input('docente', sql.VarChar, claveDocente)
-      .input('numero', sql.Int, numeroActividad)
-      .query(`
-        SELECT TOP 1 id_actividad 
-        FROM tbl_actividades 
-        WHERE vchClvTrabajador = @docente 
-          AND numero_actividad = @numero 
-        ORDER BY id_actividad DESC
-      `);
+    const respuesta = resultadoPrincipal.recordset[0];
 
-    const idActividad = actividadResult.recordset[0].id_actividad;
-    console.log('✅ Actividad creada con ID:', idActividad);
-
-    // ===============================================
-    // 🇲🇽 PASO 3: ASIGNAR A GRUPOS CON FECHAS LOCALES
-    // ===============================================
-    for (const claveGrupo of grupos) {
-      const grupoQuery = await pool.request()
-        .input('clave', sql.VarChar, claveGrupo)
-        .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
-
-      if (grupoQuery.recordset.length === 0) continue;
-      const idGrupo = grupoQuery.recordset[0].id_grupo;
-
-      console.log(`🇲🇽 Insertando fechas LOCALES para grupo ${claveGrupo}:`);
-      console.log(`   📅 fechaAsignacion: ${fechaAsignacionParaSQL.toLocaleString('es-MX')}`);
-      console.log(`   📅 fechaEntrega: ${fechaEntregaParaSQL.toLocaleString('es-MX')}`);
-
-      const fechaAsignacionString = formatearFechaParaSQL(fechaAsignacionParaSQL);
-      const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
-
-      await transaction.request()
-        .input('idActividad', sql.Int, idActividad)
-        .input('idGrupo', sql.Int, idGrupo)
-        .input('fechaAsignacion', sql.VarChar, fechaAsignacionString)
-        .input('fechaEntrega', sql.VarChar, fechaEntregaString)
-        .query(`
-          INSERT INTO tbl_actividad_grupo (id_actividad, id_grupo, fecha_asignacion, fecha_entrega)
-          VALUES (@idActividad, @idGrupo, CAST(@fechaAsignacion AS DATETIME), CAST(@fechaEntrega AS DATETIME))
-        `);
-      
-      console.log(`✅ Grupo ${claveGrupo} asignado con fechas LOCALES`);
+    // 🚨 VERIFICAR SI EL SP PRINCIPAL FALLÓ
+    if (respuesta.resultado === 'ERROR') {
+      console.error('❌ Error en SP principal:', respuesta.mensaje);
+      return res.status(500).json({
+        error: 'Error al crear actividad',
+        detalle: respuesta.mensaje
+      });
     }
 
+    const idActividad = respuesta.id_actividad;
+    const numeroActividad = respuesta.numero_actividad;
+
+    console.log('✅ SP principal ejecutado exitosamente:');
+    console.log(`   📊 ID Actividad: ${idActividad}`);
+    console.log(`   📊 Número: ${numeroActividad}`);
+    console.log(`   📊 Grupos asignados: ${respuesta.grupos_asignados}`);
+    console.log(`   📊 Alumnos asignados: ${respuesta.alumnos_asignados}`);
+
     // ===============================================
-    // 🆕 PASO 4: ASIGNAR ALUMNOS/EQUIPOS CON ESTADOS INICIALES
+    // 🚀 PASO 3: MODALIDAD EQUIPO - CON TRANSACCIÓN SEPARADA
     // ===============================================
-    
-    if (modalidad === 1) {
-      // 👤 MODALIDAD INDIVIDUAL: Asignar todos los alumnos de los grupos
-      console.log('👤 Asignando alumnos individuales...');
+    if (modalidad === 2 && Object.keys(equiposPorGrupo).length > 0) {
+      console.log('👥 Procesando equipos con SPs específicos en transacción...');
       
-      for (const claveGrupo of grupos) {
-        const grupoQuery = await pool.request()
-          .input('clave', sql.VarChar, claveGrupo)
-          .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
+      const equipoTransaction = new sql.Transaction();
+      
+      try {
+        await equipoTransaction.begin();
+        
+        for (const [claveGrupo, datosGrupo] of Object.entries(equiposPorGrupo)) {
+          const grupoQuery = await pool.request()
+            .input('clave', sql.VarChar, claveGrupo)
+            .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
 
-        if (grupoQuery.recordset.length === 0) continue;
-        const idGrupo = grupoQuery.recordset[0].id_grupo;
+          if (grupoQuery.recordset.length === 0) continue;
+          const idGrupo = grupoQuery.recordset[0].id_grupo;
 
-        // 🔍 Obtener periodo y cuatrimestre para filtrar alumnos
-        const periodoResult = await pool.request()
-          .input('claveDocente', sql.VarChar, claveDocente)
-          .input('claveMateria', sql.VarChar, claveMateria)
-          .query(`
-            SELECT TOP 1 vchCuatrimestre, Periodo 
-            FROM tbl_docente_materia 
-            WHERE vchClvTrabajador = @claveDocente 
-              AND vchClvMateria = @claveMateria
-            ORDER BY Periodo DESC
-          `);
+          let equiposParaAsignar = [];
+          
+          // 🔧 CASO 1: Usar equipos de actividad anterior
+          if (datosGrupo.tipoSeleccion === 'actividad' && datosGrupo.idActividadAnterior) {
+            console.log(`📋 Obteniendo equipos de actividad anterior: ${datosGrupo.idActividadAnterior}`);
+            
+            const equiposAnteriores = await equipoTransaction.request()
+              .input('idActividadAnterior', sql.Int, datosGrupo.idActividadAnterior)
+              .input('idGrupo', sql.Int, idGrupo)
+              .execute('sp_equiposAnteriores');
 
-        if (periodoResult.recordset.length === 0) continue;
-        const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
+            if (equiposAnteriores.recordset.length === 0) {
+              throw new Error(`No se encontraron equipos de la actividad anterior para el grupo ${claveGrupo}`);
+            }
 
-        // 🎯 Obtener alumnos del grupo y asignarlos con estado PENDIENTE
-        // 🎯 CONSULTA CORREGIDA:
-const alumnosResult = await transaction
-  .request()
-  .input("claveGrupo", sql.VarChar, claveGrupo)  // ✅ SOLUCIÓN: claveGrupo como VARCHAR
-  .input("cuatrimestre", sql.VarChar, vchCuatrimestre)
-  .input("periodo", sql.VarChar, Periodo)
-.query(`
-  SELECT vchMatricula, vchNombre, vchAPaterno
-  FROM tblAlumnos
-  WHERE chvGrupo = @claveGrupo
-    AND vchClvCuatri = @cuatrimestre
-    AND vchPeriodo = @periodo
-`)
+            equiposParaAsignar = equiposAnteriores.recordset.map(e => e.id_equipo);
+            console.log(`✅ Encontrados ${equiposParaAsignar.length} equipos anteriores`);
 
-        // 🎯 ASIGNAR CADA ALUMNO CON ESTADO INICIAL = PENDIENTE
-        for (const alumno of alumnosResult.recordset) {
-          await transaction.request()
-            .input('idActividad', sql.Int, idActividad)
-            .input('matricula', sql.VarChar, alumno.vchMatricula)
-            .input('idEstado', sql.Int, 1) // 🎯 1 = PENDIENTE
-            .query(`
-              INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado)
-              VALUES (@idActividad, @matricula, @idEstado)
-            `);
+          // 🔧 CASO 2: Crear equipos nuevos
+          } else if ((datosGrupo.tipoSeleccion === 'aleatorio' || datosGrupo.tipoSeleccion === 'manual') && datosGrupo.equiposNuevos) {
+            console.log(`📋 Creando ${datosGrupo.equiposNuevos.length} equipos nuevos`);
+            
+            for (const equipoNuevo of datosGrupo.equiposNuevos) {
+              if (!equipoNuevo.integrantes || equipoNuevo.integrantes.length === 0) {
+                console.error(`❌ Equipo "${equipoNuevo.nombre}" no tiene integrantes`);
+                continue;
+              }
+
+              const nombreEquipoUnico = `${equipoNuevo.nombre}_${Date.now()}`;
+              
+              // 🚀 SP: Crear equipo
+              const equipoCreado = await equipoTransaction.request()
+                .input('idGrupo', sql.Int, idGrupo)
+                .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
+                .execute('sp_equipoRecienCreado');
+
+              if (equipoCreado.recordset.length === 0) {
+                throw new Error(`No se pudo crear equipo "${equipoNuevo.nombre}"`);
+              }
+
+              const idEquipoCreado = equipoCreado.recordset[0].id_equipo;
+
+              // 🚀 SP: Asignar integrantes
+              for (const integrante of equipoNuevo.integrantes) {
+                if (!integrante.vchMatricula) continue;
+
+                await equipoTransaction.request()
+                  .input('idEquipo', sql.Int, idEquipoCreado)
+                  .input('matricula', sql.VarChar, integrante.vchMatricula)
+                  .execute('sp_asignarIntegranteEquipo');
+              }
+
+              equiposParaAsignar.push(idEquipoCreado);
+              console.log(`✅ Equipo "${equipoNuevo.nombre}" creado (ID: ${idEquipoCreado})`);
+            }
+          }
+
+          // 🚀 SP: Asignar equipos a la actividad
+          console.log(`🎯 Asignando ${equiposParaAsignar.length} equipos a la actividad`);
+
+          for (const idEquipo of equiposParaAsignar) {
+            const asignacionResult = await equipoTransaction.request()
+              .input('idActividad', sql.Int, idActividad)
+              .input('idEquipo', sql.Int, idEquipo)
+              .input('idGrupo', sql.Int, idGrupo)
+              .execute('sp_VerificarYAsignarEquipo');
+
+            const resultado = asignacionResult.recordset[0];
+            console.log(`${resultado.resultado}: ${resultado.mensaje}`);
+          }
+
+          console.log(`✅ Grupo ${claveGrupo}: ${equiposParaAsignar.length} equipos procesados`);
         }
-
-        console.log(`✅ Asignados ${alumnosResult.recordset.length} alumnos del grupo ${claveGrupo}`);
-      }
-      
-    } else if (modalidad === 2) {
-      // 👥 MODALIDAD EQUIPO: Procesar equipos
-      console.log('👥 Procesando equipos...');
-      
-      for (const [claveGrupo, datosGrupo] of Object.entries(equiposPorGrupo)) {
-    const grupoQuery = await pool.request()
-      .input('clave', sql.VarChar, claveGrupo)
-      .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
-
-    if (grupoQuery.recordset.length === 0) continue;
-    const idGrupo = grupoQuery.recordset[0].id_grupo;
-
-    let equiposParaAsignar = [];
-    
-    // 🔧 CASO 1: Usar equipos de actividad anterior - CORREGIDO
-    if (datosGrupo.tipoSeleccion === 'actividad' && datosGrupo.idActividadAnterior) {
-      console.log(`📋 Usando equipos de actividad anterior: ${datosGrupo.idActividadAnterior} para grupo ${claveGrupo}`);
-      
-      // ✅ OBTENER LOS EQUIPOS EXISTENTES DE LA ACTIVIDAD ANTERIOR
-      // ✅ SOLUCIÓN SIMPLE: Solo agregar timeout
-const requestConTimeout = new sql.Request(transaction);
-requestConTimeout.timeout = 120000; // 2 minutos en lugar de 30 segundos
-
-const equiposAnteriores = await requestConTimeout
-  .input('idActividadAnterior', sql.Int, datosGrupo.idActividadAnterior)
-  .input('idGrupo', sql.Int, idGrupo)
-  .query(`
-    SELECT DISTINCT ae.id_equipo
-    FROM tbl_actividad_equipo ae
-    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-    WHERE ae.id_actividad = @idActividadAnterior
-      AND e.id_grupo = @idGrupo
-  `);
-
-      // ✅ VERIFICAR QUE SE ENCONTRARON EQUIPOS
-      if (equiposAnteriores.recordset.length === 0) {
-        console.error(`❌ No se encontraron equipos de la actividad ${datosGrupo.idActividadAnterior} para el grupo ${claveGrupo}`);
-        await transaction.rollback();
-        return res.status(400).json({ 
-          error: `No se encontraron equipos de la actividad anterior para el grupo ${claveGrupo}`,
-          grupoProblema: claveGrupo,
-          idActividadAnterior: datosGrupo.idActividadAnterior
+        
+        await equipoTransaction.commit();
+        console.log('✅ Transacción de equipos completada exitosamente');
+        
+      } catch (equipoError) {
+        await equipoTransaction.rollback();
+        console.error('❌ Error en procesamiento de equipos, rollback realizado:', equipoError.message);
+        return res.status(500).json({
+          error: 'Error al procesar equipos',
+          detalle: equipoError.message,
+          nota: 'La actividad fue creada pero los equipos fallaron'
         });
       }
-
-      equiposParaAsignar = equiposAnteriores.recordset.map(e => e.id_equipo);
-      console.log(`✅ Encontrados ${equiposParaAsignar.length} equipos de actividad anterior para grupo ${claveGrupo}`);
-
-    // 🔧 CASO 2: Crear equipos nuevos - MEJORADO
-    } else if ((datosGrupo.tipoSeleccion === 'aleatorio' || datosGrupo.tipoSeleccion === 'manual') && datosGrupo.equiposNuevos) {
-      console.log(`📋 Creando ${datosGrupo.equiposNuevos.length} equipos nuevos para grupo ${claveGrupo}`);
-      
-      for (const equipoNuevo of datosGrupo.equiposNuevos) {
-        // 🔧 VALIDAR QUE EL EQUIPO TIENE INTEGRANTES
-        if (!equipoNuevo.integrantes || equipoNuevo.integrantes.length === 0) {
-          console.error(`❌ Equipo "${equipoNuevo.nombre}" no tiene integrantes`);
-          continue;
-        }
-
-        // 🔧 PASO 1: Crear equipo con nombre único
-        const nombreEquipoUnico = `${equipoNuevo.nombre}_${Date.now()}`;
-        
-        await transaction.request()
-          .input('idGrupo', sql.Int, idGrupo)
-          .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
-          .query(`
-            INSERT INTO tbl_equipos (id_grupo, nombre_equipo)
-            VALUES (@idGrupo, @nombreEquipo)
-          `);
-
-        // 🔧 PASO 2: Obtener ID del equipo recién creado
-        const equipoRecienCreado = await transaction.request()
-          .input('idGrupo', sql.Int, idGrupo)
-          .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
-          .query(`
-            SELECT TOP 1 id_equipo 
-            FROM tbl_equipos 
-            WHERE id_grupo = @idGrupo 
-              AND nombre_equipo = @nombreEquipo 
-            ORDER BY id_equipo DESC
-          `);
-
-        if (equipoRecienCreado.recordset.length === 0) {
-          console.error(`❌ No se pudo crear el equipo "${equipoNuevo.nombre}"`);
-          continue;
-        }
-
-        const idEquipoCreado = equipoRecienCreado.recordset[0].id_equipo;
-
-        // 🔧 PASO 3: Asignar integrantes al equipo
-        for (const integrante of equipoNuevo.integrantes) {
-          // ✅ VALIDAR QUE LA MATRÍCULA EXISTE
-          if (!integrante.vchMatricula) {
-            console.error(`❌ Integrante sin matrícula:`, integrante);
-            continue;
-          }
-
-          try {
-            await transaction.request()
-              .input('idEquipo', sql.Int, idEquipoCreado)
-              .input('matricula', sql.VarChar, integrante.vchMatricula)
-              .query(`
-                INSERT INTO tbl_equipo_alumno (id_equipo, vchMatricula)
-                VALUES (@idEquipo, @matricula)
-              `);
-          } catch (integranteError) {
-            console.error(`❌ Error al asignar integrante ${integrante.vchMatricula}:`, integranteError.message);
-            // Continuar con los demás integrantes
-          }
-        }
-
-        equiposParaAsignar.push(idEquipoCreado);
-        console.log(`✅ Equipo "${equipoNuevo.nombre}" creado con ${equipoNuevo.integrantes.length} integrantes (ID: ${idEquipoCreado})`);
-      }
-    } else {
-      console.log(`⚠️ Grupo ${claveGrupo}: No se configuraron equipos o tipo de selección inválido`);
-      // Continuar sin equipos para este grupo
     }
 
-    // 🎯 ASIGNAR EQUIPOS A LA ACTIVIDAD - MEJORADO CON VALIDACIONES
-    console.log(`🎯 Asignando ${equiposParaAsignar.length} equipos a la actividad para grupo ${claveGrupo}`);
-
-    for (const idEquipo of equiposParaAsignar) {
-      try {
-        // ✅ VERIFICAR QUE EL EQUIPO NO ESTÉ YA ASIGNADO A ESTA ACTIVIDAD
-        const yaAsignado = await transaction.request()
-          .input('idActividad', sql.Int, idActividad)
-          .input('idEquipo', sql.Int, idEquipo)
-          .query(`
-            SELECT COUNT(*) as existe
-            FROM tbl_actividad_equipo
-            WHERE id_actividad = @idActividad AND id_equipo = @idEquipo
-          `);
-
-        if (yaAsignado.recordset[0].existe > 0) {
-          console.log(`⚠️ Equipo ${idEquipo} ya está asignado a esta actividad, saltando...`);
-          continue;
-        }
-
-        // ✅ ASIGNAR EQUIPO A LA ACTIVIDAD
-        await transaction.request()
-          .input('idActividad', sql.Int, idActividad)
-          .input('idEquipo', sql.Int, idEquipo)
-          .input('idEstado', sql.Int, 1) // 🎯 1 = PENDIENTE
-          .query(`
-            INSERT INTO tbl_actividad_equipo (id_actividad, id_equipo, id_estado)
-            VALUES (@idActividad, @idEquipo, @idEstado)
-          `);
-
-        console.log(`✅ Equipo ${idEquipo} asignado correctamente`);
-
-      } catch (equipoError) {
-        console.error(`❌ Error al asignar equipo ${idEquipo}:`, equipoError.message);
-        // Continuar con los demás equipos
-      }
-    }
-
-    console.log(`✅ Procesamiento completado para grupo ${claveGrupo}: ${equiposParaAsignar.length} equipos asignados`);
-  }
-}
-
     // ===============================================
-    // 🔍 VERIFICACIÓN INMEDIATA EN BD
+    // 🚀 PASO 4: VERIFICACIÓN FINAL
     // ===============================================
-    const verificacion = await transaction.request()
-      .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT TOP 1
-          ag.fecha_entrega,
-          DATEPART(year, ag.fecha_entrega) as año,
-          DATEPART(month, ag.fecha_entrega) as mes,
-          DATEPART(day, ag.fecha_entrega) as dia,
-          DATEPART(hour, ag.fecha_entrega) as hora,
-          DATEPART(minute, ag.fecha_entrega) as minuto,
-          DATENAME(weekday, ag.fecha_entrega) as dia_semana,
-          GETDATE() as hora_servidor_actual
-        FROM tbl_actividad_grupo ag 
-        WHERE ag.id_actividad = @idActividad
-      `);
-
-    const fechaGuardada = verificacion.recordset[0];
-    console.log('🔍 VERIFICACIÓN CRÍTICA - Fecha en BD:');
-    console.log(`   📅 Fecha completa en BD: ${fechaGuardada.fecha_entrega}`);
-    console.log(`   🕐 Hora en BD: ${fechaGuardada.hora}:${fechaGuardada.minuto}`);
-    console.log(`   📊 Día: ${fechaGuardada.dia_semana}`);
+    console.log('🔍 Ejecutando verificación automática...');
     
-    // 🚨 VALIDACIÓN CRÍTICA
-    const horaOriginal = parseInt(fechaEntrega.split(' ')[1].split(':')[0]);
-    const minutoOriginal = parseInt(fechaEntrega.split(' ')[1].split(':')[1]);
-    
-    if (fechaGuardada.hora !== horaOriginal || fechaGuardada.minuto !== minutoOriginal) {
-      console.error('❌ ERROR CRÍTICO: La hora/minuto cambió al guardar en BD');
-      console.error(`   Hora original: ${horaOriginal}:${minutoOriginal}`);
-      console.error(`   Hora guardada: ${fechaGuardada.hora}:${fechaGuardada.minuto}`);
-    } else {
-      console.log('✅ ÉXITO: La hora y minuto se guardaron correctamente');
-      console.log(`   ✅ Hora original: ${horaOriginal}:${minutoOriginal}`);
-      console.log(`   ✅ Hora guardada: ${fechaGuardada.hora}:${fechaGuardada.minuto}`);
+    try {
+      const verificacionResult = await pool.request()
+        .input('idActividad', sql.Int, idActividad)
+        .execute('sp_VerificarFechaActividadAuto');
+
+      const verificacion = verificacionResult.recordset[0];
+      console.log(`🔍 ${verificacion.estado_validacion}: ${verificacion.validacion_resultado}`);
+    } catch (verificacionError) {
+      console.log('⚠️ Verificación automática no disponible, continuando...');
     }
 
     // ===============================================
-    // CONFIRMAR TRANSACCIÓN
+    // 🎉 RESPUESTA EXITOSA
     // ===============================================
-    await transaction.commit();
-
-    console.log('🎉 ¡Actividad creada correctamente con estados iniciales!');
+    console.log('🎉 ¡Actividad creada exitosamente con SP optimizado!');
 
     res.status(201).json({ 
-      mensaje: 'Actividad creada correctamente con estados iniciales',
+      mensaje: respuesta.mensaje,
       actividad: {
         idActividad,
         titulo,
         modalidad: modalidad === 1 ? 'Individual' : 'Equipo',
         numeroActividad,
         componente: idValorComponente,
-        estadosConfigurados: true,
-        estadoInicial: 'Pendiente (1)'
+        estadosConfigurados: true
+      },
+      estadisticas: {
+        gruposAsignados: respuesta.grupos_asignados,
+        alumnosAsignados: respuesta.alumnos_asignados,
+        totalEntidades: modalidad === 1 ? respuesta.alumnos_asignados : Object.keys(equiposPorGrupo).length
       },
       debug: {
+        spPrincipalUsado: 'sp_numeroResult',
+        modalidad: modalidad === 1 ? 'Individual (manejada por SP)' : 'Equipo (SPs específicos)',
         fechaOriginal: fechaEntrega,
-        fechaGuardada: fechaGuardada,
-        horaOriginal: `${horaOriginal}:${minutoOriginal}`,
-        horaGuardada: `${fechaGuardada.hora}:${fechaGuardada.minuto}`,
-        coincideCompleta: fechaGuardada.hora === horaOriginal && fechaGuardada.minuto === minutoOriginal
+        fechaProcesada: fechaEntregaString
       }
     });
 
   } catch (error) {
-    await transaction.rollback();
-    console.error('❌ Error al crear actividad:', error);
+    console.error('❌ Error general al crear actividad:', error);
     res.status(500).json({
       error: 'Error al crear actividad',
       detalle: error.message,
@@ -1791,139 +1313,129 @@ const crearActividad = async (req, res) => {
     grupos
   } = req.body;
 
-  const transaction = new sql.Transaction();
-
   try {
     const pool = await sql.connect(config);
-    await transaction.begin();
 
-    // Buscar id_instrumento correspondiente
-    const instrumentoQuery = await pool.request()
+    // 🚀 PASO 1: Obtener instrumento usando SP
+    const instrumentoResult = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .query(`
-        SELECT TOP 1 id_instrumento
-        FROM tbl_instrumento
-        WHERE vchClvTrabajador = @claveDocente
-          AND vchClvMateria = @claveMateria
-          AND parcial = @parcial
-      `);
+      .execute('sp_instrumentoQuery');
 
-    const instrumento = instrumentoQuery.recordset[0];
-    if (!instrumento) {
-      await transaction.rollback();
-      return res.status(400).json({ error: 'No se encontró instrumento para este docente/materia/parcial' });
+    if (instrumentoResult.recordset.length === 0) {
+      return res.status(400).json({ 
+        error: 'No se encontró instrumento para este docente/materia/parcial' 
+      });
     }
 
-    const idInstrumento = instrumento.id_instrumento;
+    const idInstrumento = instrumentoResult.recordset[0].id_instrumento;
 
-    // Obtener número consecutivo para numero_actividad
-    const numeroResult = await transaction.request().query(`
-      SELECT ISNULL(MAX(numero_actividad), 0) + 1 AS siguiente FROM tbl_actividades
-    `);
+    // 🚀 PASO 2: Obtener siguiente número de actividad usando SP
+    const numeroResult = await pool.request()
+      .execute('sp_numeroResult2');
+    
     const numeroActividad = numeroResult.recordset[0].siguiente;
 
-    // 🔧 ELIMINAR REFERENCIAS A id_estado_actividad
-    await transaction.request()
+    // 🚀 PASO 3: Crear actividad usando SP
+    const actividadResult = await pool.request()
       .input('titulo', sql.NVarChar, titulo)
       .input('descripcion', sql.NVarChar, descripcion)
-      .input('fecha', sql.DateTime, new Date())
-      .input('docente', sql.VarChar, claveDocente)
+      .input('fecha', sql.Date, new Date())
+      .input('docente', sql.NVarChar, claveDocente)
       .input('idInstrumento', sql.Int, idInstrumento)
       .input('numero', sql.Int, numeroActividad)
-      .input('modalidad', sql.Int, 1) // Por defecto individual
-      .query(`
-        INSERT INTO tbl_actividades (
-          titulo, descripcion, fecha_creacion, vchClvTrabajador,
-          id_instrumento, numero_actividad, id_modalidad
-        )
-        VALUES (@titulo, @descripcion, @fecha, @docente, @idInstrumento, @numero, @modalidad)
-      `);
+      .input('modalidad', sql.Int, 1) // Siempre individual
+      .execute('sp_actividadResult');
 
-    // Obtener el ID de la actividad insertada
-    const actividadResult = await transaction.request()
-      .input('docente', sql.VarChar, claveDocente)
-      .input('numero', sql.Int, numeroActividad)
-      .query(`
-        SELECT TOP 1 id_actividad 
-        FROM tbl_actividades 
-        WHERE vchClvTrabajador = @docente 
-          AND numero_actividad = @numero 
-        ORDER BY id_actividad DESC
-      `);
+    const idActividad = actividadResult.recordset[0].idActividad;
 
-    const idActividad = actividadResult.recordset[0].id_actividad;
+    // 🚀 PASO 4: Procesar cada grupo usando SPs
+    let totalAlumnosAsignados = 0;
 
-    // Insertar actividad por grupo y asignar alumnos con estados
     for (const claveGrupo of grupos) {
-      
+      // Obtener ID de grupo
+      const grupoQuery = await pool.request()
+        .input('clave', sql.VarChar, claveGrupo)
+        .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
 
-      // Insertar en tbl_actividad_grupo
-      await transaction.request()
+      if (grupoQuery.recordset.length === 0) continue;
+      const idGrupo = grupoQuery.recordset[0].id_grupo;
+
+      // 🚀 SP: Insertar actividad-grupo
+      await pool.request()
         .input('idActividad', sql.Int, idActividad)
         .input('idGrupo', sql.Int, idGrupo)
         .input('fechaAsignacion', sql.DateTime, new Date())
         .input('fechaEntrega', sql.DateTime, fechaEntrega)
-        .query(`
-          INSERT INTO tbl_actividad_grupo (id_actividad, id_grupo, fecha_asignacion, fecha_entrega)
-          VALUES (@idActividad, @idGrupo, @fechaAsignacion, @fechaEntrega)
-        `);
+        .execute('sp_InsertarActividadGrupo');
 
-      // 🆕 ASIGNAR ALUMNOS CON ESTADOS INICIALES
+      // 🚀 SP: Obtener periodo/cuatrimestre
       const periodoResult = await pool.request()
         .input('claveDocente', sql.VarChar, claveDocente)
         .input('claveMateria', sql.VarChar, claveMateria)
-        .query(`
-          SELECT TOP 1 vchCuatrimestre, Periodo 
-          FROM tbl_docente_materia 
-          WHERE vchClvTrabajador = @claveDocente 
-            AND vchClvMateria = @claveMateria
-          ORDER BY Periodo DESC
-        `);
+        .execute('sp_periodoResult');
 
       if (periodoResult.recordset.length === 0) continue;
       const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
 
-      const alumnosResult = await transaction.request()
+      // 🚀 SP: Obtener alumnos del grupo
+      const alumnosResult = await pool.request()
         .input('idGrupo', sql.Int, idGrupo)
         .input('cuatrimestre', sql.VarChar, vchCuatrimestre)
         .input('periodo', sql.VarChar, Periodo)
-        .query(`
-          SELECT vchMatricula
-          FROM tblAlumnos
-          WHERE chvGrupo = @idGrupo
-            AND vchClvCuatri = @cuatrimestre
-            AND vchPeriodo = @periodo
-        `);
+        .execute('sp_alumnosResult');
 
-      // Asignar cada alumno con estado PENDIENTE
+      // 🚀 SP: Asignar cada alumno con estado PENDIENTE
       for (const alumno of alumnosResult.recordset) {
-        await transaction.request()
+        await pool.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, alumno.vchMatricula)
           .input('idEstado', sql.Int, 1) // 1 = PENDIENTE
-          .query(`
-            INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado)
-            VALUES (@idActividad, @matricula, @idEstado)
-          `);
+          .execute('sp_AsignarAlumnoActividadPendiente');
+        
+        totalAlumnosAsignados++;
       }
     }
 
-    await transaction.commit();
+    console.log(`✅ Actividad creada usando SPs: ID=${idActividad}, Alumnos=${totalAlumnosAsignados}`);
+
     res.status(201).json({ 
-      mensaje: 'Actividad creada correctamente con estados iniciales', 
-      idActividad,
-      estadosConfigurados: true 
+      mensaje: 'Actividad creada correctamente con estados iniciales usando SPs', 
+      actividad: {
+        idActividad,
+        titulo,
+        numeroActividad,
+        modalidad: 'Individual',
+        parcial,
+        estadosConfigurados: true
+      },
+      estadisticas: {
+        gruposAsignados: grupos.length,
+        alumnosAsignados: totalAlumnosAsignados
+      },
+      debug: {
+        idInstrumentoObtenido: idInstrumento,
+        spUtilizados: [
+          'sp_instrumentoQuery',
+          'sp_numeroResult2', 
+          'sp_actividadResult',
+          'sp_InsertarActividadGrupo',
+          'sp_periodoResult',
+          'sp_alumnosResult',
+          'sp_AsignarAlumnoActividadPendiente'
+        ]
+      }
     });
 
   } catch (error) {
-    await transaction.rollback();
-    console.error('❌ Error al crear actividad:', error);
-    res.status(500).json({ mensaje: 'Error interno al registrar la actividad' });
+    console.error('❌ Error al crear actividad simple:', error);
+    res.status(500).json({ 
+      mensaje: 'Error interno al registrar la actividad',
+      detalle: error.message
+    });
   }
 };
-
 // ===============================================
 // 🆕 FUNCIONES PARA OBSERVACIONES
 // ===============================================
@@ -1940,11 +1452,7 @@ const guardarObservacionAlumno = async (req, res) => {
     await pool.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .input('observacion', sql.NVarChar, observacion || null)
-      .query(`
-        UPDATE tbl_actividad_alumno 
-        SET observacion = @observacion 
-        WHERE id_actividad_alumno = @idActividadAlumno
-      `);
+      .execute(`sp_ActualizarObservacionAlumno`);
 
     console.log('✅ Observación de alumno guardada correctamente');
     res.json({ mensaje: 'Observación guardada correctamente' });
@@ -1967,11 +1475,7 @@ const guardarObservacionEquipo = async (req, res) => {
     await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .input('observacion', sql.NVarChar, observacion || null)
-      .query(`
-        UPDATE tbl_actividad_equipo 
-        SET observacion = @observacion 
-        WHERE id_actividad_equipo = @idActividadEquipo
-      `);
+      .execute(`sp_GuardarObservacionEquipo`);
 
     console.log('✅ Observación de equipo guardada correctamente');
     res.json({ mensaje: 'Observación del equipo guardada correctamente' });
@@ -1990,11 +1494,7 @@ const obtenerObservacionAlumno = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
-      .query(`
-        SELECT observacion 
-        FROM tbl_actividad_alumno 
-        WHERE id_actividad_alumno = @idActividadAlumno
-      `);
+      .execute(`sp_obtenerObservacionAlumno`);
 
     res.json({ 
       observacion: result.recordset[0]?.observacion || '' 
@@ -2014,11 +1514,7 @@ const obtenerObservacionEquipo = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT observacion 
-        FROM tbl_actividad_equipo 
-        WHERE id_actividad_equipo = @idActividadEquipo
-      `);
+      .execute(`sp_obtenerObservacionEquipo`);
 
     res.json({ 
       observacion: result.recordset[0]?.observacion || '' 
@@ -2104,16 +1600,7 @@ const obtenerListasCotejo = async (req, res) => {
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
-      .query(`
-        SELECT 
-          id_instrumento,
-          nombre,
-          CONCAT('Parcial ', parcial, ' - ', nombre) AS descripcion
-        FROM tbl_instrumento
-        WHERE vchClvTrabajador = @claveDocente
-          AND vchClvMateria = @claveMateria
-        ORDER BY parcial, nombre
-    `);
+      .execute(`sp_obtenerListasCotejo`);
 
     res.json(result.recordset);
   } catch (error) {
@@ -2133,246 +1620,27 @@ const obtenerActividadesPorGrupo = async (req, res) => {
     
     console.log(`📊 Cargando actividades para grupo específico: ${idGrupo}`);
     
-    let whereConditions = `
-      WHERE i.vchClvTrabajador = @claveDocente
-        AND i.vchClvMateria = @claveMateria
-        AND ag.id_grupo = @idGrupo
-    `;
-    
-    if (parcial) whereConditions += ` AND i.parcial = @parcial`;
-    if (modalidad) whereConditions += ` AND a.id_modalidad = @modalidad`;
-
+    // 🎯 CONFIGURAR PARÁMETROS PARA EL STORED PROCEDURE
     const request = pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo);
     
-    if (parcial) request.input('parcial', sql.Int, parcial);
-    if (modalidad) request.input('modalidad', sql.Int, modalidad);
+    // Agregar parámetros opcionales (null si no se proporcionan)
+    if (parcial) {
+      request.input('parcial', sql.Int, parcial);
+    } else {
+      request.input('parcial', sql.Int, null);
+    }
+    
+    if (modalidad) {
+      request.input('modalidad', sql.Int, modalidad);
+    } else {
+      request.input('modalidad', sql.Int, null);
+    }
 
-    const result = await request.query(`
-      SELECT 
-        a.id_actividad,
-        a.titulo,
-        a.descripcion,
-        a.fecha_creacion,
-        a.numero_actividad,
-        ISNULL(a.id_modalidad, 1) as id_modalidad,
-        ag.fecha_asignacion,
-        ag.fecha_entrega,
-        i.parcial,
-        ISNULL(i.nombre, 'Sin nombre') AS nombre_instrumento,
-        g.vchGrupo,
-        vce.componente as nombre_componente,
-        
-        -- 🎯 CONTEO CORRECTO: Solo del grupo específico
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            -- Modalidad individual: contar alumnos solo de este grupo
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_alumno aa 
-             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-             WHERE aa.id_actividad = a.id_actividad 
-               AND al.chvGrupo = @idGrupo)
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            -- 🔧 Modalidad equipo: contar SOLO equipos de este grupo
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_equipo ae 
-             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-             WHERE ae.id_actividad = a.id_actividad 
-               AND e.id_grupo = @idGrupo)
-          ELSE 0
-        END AS totalEntregas,
-        
-        -- 📊 ESTADÍSTICAS FILTRADAS POR GRUPO
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            -- Individual: alumnos PENDIENTES de este grupo
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_alumno aa 
-             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-             WHERE aa.id_actividad = a.id_actividad 
-               AND aa.id_estado = 1 
-               AND al.chvGrupo = @idGrupo)
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            -- 🔧 Equipo: equipos PENDIENTES de este grupo
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_equipo ae 
-             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-             WHERE ae.id_actividad = a.id_actividad 
-               AND ae.id_estado = 1 
-               AND e.id_grupo = @idGrupo)
-          ELSE 0
-        END AS alumnosPendientes,
-        
-        -- ✅ ENTREGADOS A TIEMPO (estado = 2) - FILTRADO POR GRUPO
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_alumno aa 
-             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-             WHERE aa.id_actividad = a.id_actividad 
-               AND aa.id_estado = 2 
-               AND al.chvGrupo = @idGrupo)
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_equipo ae 
-             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-             WHERE ae.id_actividad = a.id_actividad 
-               AND ae.id_estado = 2 
-               AND e.id_grupo = @idGrupo)
-          ELSE 0
-        END AS entregadosATiempo,
-        
-        -- ❌ NO ENTREGADOS (estado = 3) - FILTRADO POR GRUPO
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_alumno aa 
-             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-             WHERE aa.id_actividad = a.id_actividad 
-               AND aa.id_estado = 3 
-               AND al.chvGrupo = @idGrupo)
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_equipo ae 
-             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-             WHERE ae.id_actividad = a.id_actividad 
-               AND ae.id_estado = 3 
-               AND e.id_grupo = @idGrupo)
-          ELSE 0
-        END AS noEntregados,
-        
-        -- 🕐 ENTREGADOS TARDE (estado = 4) - FILTRADO POR GRUPO
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_alumno aa 
-             INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-             WHERE aa.id_actividad = a.id_actividad 
-               AND aa.id_estado = 4 
-               AND al.chvGrupo = @idGrupo)
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            (SELECT COUNT(*) 
-             FROM tbl_actividad_equipo ae 
-             INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-             WHERE ae.id_actividad = a.id_actividad 
-               AND ae.id_estado = 4 
-               AND e.id_grupo = @idGrupo)
-          ELSE 0
-        END AS entregadosTarde,
-        
-        -- 🎯 ESTADO GENERAL DE LA ACTIVIDAD (calculado para este grupo)
-        CASE 
-          -- Si ya pasó la fecha de entrega
-          WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 
-            CASE 
-              WHEN (SELECT COUNT(*) 
-                    FROM tbl_actividad_alumno aa 
-                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                    WHERE aa.id_actividad = a.id_actividad 
-                      AND aa.id_estado IN (3) 
-                      AND al.chvGrupo = @idGrupo) > 0 
-                OR (SELECT COUNT(*) 
-                    FROM tbl_actividad_equipo ae 
-                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                    WHERE ae.id_actividad = a.id_actividad 
-                      AND ae.id_estado IN (3) 
-                      AND e.id_grupo = @idGrupo) > 0
-              THEN 'vencida'
-              WHEN (SELECT COUNT(*) 
-                    FROM tbl_actividad_alumno aa 
-                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                    WHERE aa.id_actividad = a.id_actividad 
-                      AND aa.id_estado = 1 
-                      AND al.chvGrupo = @idGrupo) > 0 
-                OR (SELECT COUNT(*) 
-                    FROM tbl_actividad_equipo ae 
-                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                    WHERE ae.id_actividad = a.id_actividad 
-                      AND ae.id_estado = 1 
-                      AND e.id_grupo = @idGrupo) > 0
-              THEN 'pendiente_vencida'
-              ELSE 'completada'
-            END
-          -- Si aún hay tiempo
-          ELSE 
-            CASE 
-              WHEN (SELECT COUNT(*) 
-                    FROM tbl_actividad_alumno aa 
-                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                    WHERE aa.id_actividad = a.id_actividad 
-                      AND aa.id_estado = 1 
-                      AND al.chvGrupo = @idGrupo) > 0 
-                OR (SELECT COUNT(*) 
-                    FROM tbl_actividad_equipo ae 
-                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                    WHERE ae.id_actividad = a.id_actividad 
-                      AND ae.id_estado = 1 
-                      AND e.id_grupo = @idGrupo) > 0
-              THEN 'activa'
-              ELSE 'completada'
-            END
-        END AS estadoActividad,
-        
-        -- ⏰ DÍAS RESTANTES
-        DATEDIFF(day, GETDATE(), ag.fecha_entrega) AS diasRestantes,
-        
-        -- 📈 PORCENTAJE DE COMPLETADO (basado en estados del grupo)
-        CASE 
-          WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-            CASE 
-              WHEN (SELECT COUNT(*) 
-                    FROM tbl_actividad_alumno aa 
-                    INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                    WHERE aa.id_actividad = a.id_actividad 
-                      AND al.chvGrupo = @idGrupo) > 0
-              THEN ROUND(
-                (CAST((SELECT COUNT(*) 
-                       FROM tbl_actividad_alumno aa 
-                       INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                       WHERE aa.id_actividad = a.id_actividad 
-                         AND aa.id_estado IN (2,4) 
-                         AND al.chvGrupo = @idGrupo) AS FLOAT) / 
-                 CAST((SELECT COUNT(*) 
-                       FROM tbl_actividad_alumno aa 
-                       INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                       WHERE aa.id_actividad = a.id_actividad 
-                         AND al.chvGrupo = @idGrupo) AS FLOAT)) * 100, 1)
-              ELSE 0
-            END
-          WHEN ISNULL(a.id_modalidad, 1) = 2 THEN 
-            CASE 
-              WHEN (SELECT COUNT(*) 
-                    FROM tbl_actividad_equipo ae 
-                    INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                    WHERE ae.id_actividad = a.id_actividad 
-                      AND e.id_grupo = @idGrupo) > 0
-              THEN ROUND(
-                (CAST((SELECT COUNT(*) 
-                       FROM tbl_actividad_equipo ae 
-                       INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                       WHERE ae.id_actividad = a.id_actividad 
-                         AND ae.id_estado IN (2,4) 
-                         AND e.id_grupo = @idGrupo) AS FLOAT) / 
-                 CAST((SELECT COUNT(*) 
-                       FROM tbl_actividad_equipo ae 
-                       INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                       WHERE ae.id_actividad = a.id_actividad 
-                         AND e.id_grupo = @idGrupo) AS FLOAT)) * 100, 1)
-              ELSE 0
-            END
-          ELSE 0
-        END AS porcentajeCompletado
-
-      FROM tbl_actividades a
-      INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-      INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-      INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-      LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-      ${whereConditions}
-      ORDER BY i.parcial, a.numero_actividad DESC, a.fecha_creacion DESC
-    `);
+    // 🚀 EJECUTAR EL STORED PROCEDURE
+    const result = await request.execute('sp_obtenerActividadesPorGrupo');
 
     // 🎯 PROCESAR RESULTADOS CON ESTADÍSTICAS FILTRADAS POR GRUPO
     const actividadesPorParcial = {};
@@ -2440,54 +1708,7 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo)
-      .query(`
-        WITH EstadisticasActividades AS (
-          SELECT 
-            a.id_actividad,
-            -- 🔧 Sumar alumnos/equipos PENDIENTES solo del grupo específico
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_alumno aa 
-                 INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                 WHERE aa.id_actividad = a.id_actividad 
-                   AND aa.id_estado = 1 
-                   AND al.chvGrupo = @idGrupo)
-              ELSE 
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_equipo ae 
-                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                 WHERE ae.id_actividad = a.id_actividad 
-                   AND ae.id_estado = 1 
-                   AND e.id_grupo = @idGrupo)
-            END AS pendientes,
-            
-            -- Verificar si ya venció
-            CASE WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 1 ELSE 0 END AS yaVencio
-            
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          WHERE i.vchClvTrabajador = @claveDocente
-            AND i.vchClvMateria = @claveMateria
-            AND ag.id_grupo = @idGrupo
-        )
-        
-        SELECT 
-          -- ✅ Actividades 100% sin pendientes del grupo
-          SUM(CASE WHEN pendientes = 0 THEN 1 ELSE 0 END) as actividadesCompletas,
-          
-          -- 📝 Total de pendientes en todas las actividades del grupo
-          SUM(pendientes) as totalPendientes,
-          
-          -- 🚨 Actividades vencidas con pendientes del grupo
-          SUM(CASE WHEN yaVencio = 1 AND pendientes > 0 THEN 1 ELSE 0 END) as actividadesVencidas,
-          
-          -- 📊 Total de actividades del grupo
-          COUNT(*) as totalActividades
-          
-        FROM EstadisticasActividades
-      `);
+      .execute(`sp_obtenerEstadisticasGlobalesPorGrupo`);
 
     const stats = estadisticasGlobales.recordset[0] || {
       actividadesCompletas: 0,
@@ -2540,43 +1761,39 @@ const cambiarContrasenaDocente = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Verificar contraseña actual
-    const verificarResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE
+    const result = await pool.request()
       .input('usuario', sql.VarChar, usuario)
       .input('contrasenaActual', sql.VarChar, contrasenaActual)
-      .query(`
-        SELECT vchClvTrabajador 
-        FROM tbl_docentes 
-        WHERE RTRIM(vchClvTrabajador) = RTRIM(@usuario) 
-          AND vchContrasenia = @contrasenaActual
-      `);
-
-    if (verificarResult.recordset.length === 0) {
-      return res.status(400).json({ mensaje: 'La contraseña actual es incorrecta' });
-    }
-
-    // Actualizar contraseña
-    const updateResult = await pool.request()
-      .input('usuario', sql.VarChar, usuario)
       .input('nuevaContrasena', sql.VarChar, nuevaContrasena)
-      .query(`
-        UPDATE tbl_docentes 
-        SET vchContrasenia = @nuevaContrasena 
-        WHERE RTRIM(vchClvTrabajador) = RTRIM(@usuario)
-      `);
+      .execute('sp_cambiarContrasenaDocente');
 
-    if (updateResult.rowsAffected[0] > 0) {
-      res.json({ mensaje: 'Contraseña actualizada correctamente' });
-    } else {
-      res.status(500).json({ mensaje: 'Error al actualizar la contraseña' });
-    }
+    // ✅ Si llega aquí, la operación fue exitosa
+    const mensaje = result.recordset[0]?.mensaje || 'Contraseña actualizada correctamente';
+    
+    res.json({ 
+      mensaje: mensaje,
+      success: true 
+    });
 
   } catch (err) {
     console.error('❌ Error al cambiar contraseña:', err);
-    res.status(500).json({ mensaje: 'Error en el servidor' });
+    
+    // 🎯 MANEJAR ERRORES DEL STORED PROCEDURE
+    if (err.message && err.message.includes('La contraseña actual es incorrecta')) {
+      return res.status(400).json({ 
+        mensaje: 'La contraseña actual es incorrecta',
+        success: false 
+      });
+    }
+    
+    // Error genérico del servidor
+    res.status(500).json({ 
+      mensaje: 'Error en el servidor',
+      success: false 
+    });
   }
 };
-
 // ===============================================
 // FUNCIONES PARA MANEJO DE EQUIPOS
 // ===============================================
@@ -2589,23 +1806,7 @@ const obtenerEquiposPorGrupo = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('idGrupo', sql.Int, idGrupo)
-      .query(`
-        SELECT 
-          e.id_equipo,
-          e.nombre_equipo,
-          COUNT(ea.vchMatricula) as total_integrantes,
-          STRING_AGG(
-            CONCAT(a.vchNombre, ' ', a.vchAPaterno), 
-            ', '
-          ) as integrantes_nombres,
-          STRING_AGG(ea.vchMatricula, ', ') as matriculas
-        FROM tbl_equipos e
-        LEFT JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
-        LEFT JOIN tblAlumnos a ON ea.vchMatricula = a.vchMatricula
-        WHERE e.id_grupo = @idGrupo
-        GROUP BY e.id_equipo, e.nombre_equipo
-        ORDER BY e.nombre_equipo
-      `);
+      .execute(`sp_obtenerEquiposPorGrupo`);
 
     res.json(result.recordset);
   } catch (error) {
@@ -2621,46 +1822,30 @@ const obtenerAlumnosPorGrupo = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Obtener periodo y cuatrimestre del docente-materia
-    const periodoResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (combina ambas consultas)
+    const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
-      .query(`
-        SELECT TOP 1 vchCuatrimestre, Periodo 
-        FROM tbl_docente_materia 
-        WHERE vchClvTrabajador = @claveDocente 
-          AND vchClvMateria = @claveMateria
-      `);
-
-    if (periodoResult.recordset.length === 0) {
-      return res.status(404).json({ error: 'No se encontró la relación docente-materia' });
-    }
-
-    const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
-
-    // Obtener alumnos del grupo filtrados por periodo/cuatrimestre
-    const result = await pool.request()
       .input('idGrupo', sql.Int, idGrupo)
-      .input('cuatrimestre', sql.VarChar, vchCuatrimestre)
-      .input('periodo', sql.VarChar, Periodo)
-      .query(`
-        SELECT 
-          a.vchMatricula,
-          CONCAT(a.vchNombre, ' ', a.vchAPaterno, ' ', a.vchAMaterno) as nombreCompleto,
-          a.vchNombre,
-          a.vchAPaterno,
-          a.vchAMaterno
-        FROM tblAlumnos a
-        WHERE a.chvGrupo = @idGrupo
-          AND a.vchClvCuatri = @cuatrimestre
-          AND a.vchPeriodo = @periodo
-        ORDER BY a.vchNombre, a.vchAPaterno
-      `);
+      .execute('sp_obtenerAlumnosPorGrupo');
 
+    // ✅ Retornar los alumnos encontrados
     res.json(result.recordset);
+
   } catch (error) {
     console.error('❌ Error al obtener alumnos:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    
+    // 🎯 MANEJAR ERROR ESPECÍFICO DEL STORED PROCEDURE
+    if (error.message && error.message.includes('No se encontró la relación docente-materia')) {
+      return res.status(404).json({ 
+        error: 'No se encontró la relación docente-materia' 
+      });
+    }
+    
+    // Error genérico del servidor
+    res.status(500).json({ 
+      error: 'Error del servidor' 
+    });
   }
 };
 
@@ -2671,49 +1856,21 @@ const simularEquiposAleatorios = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    // Obtener alumnos disponibles
-    const periodoResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (combina periodo + alumnos aleatorizados)
+    const result = await pool.request()
+      .input('idGrupo', sql.Int, idGrupo)
+      .input('cantidadEquipos', sql.Int, cantidadEquipos)
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
-      .query(`
-        SELECT TOP 1 vchCuatrimestre, Periodo 
-        FROM tbl_docente_materia 
-        WHERE vchClvTrabajador = @claveDocente 
-          AND vchClvMateria = @claveMateria
-      `);
+      .execute('sp_simularEquiposAleatorios');
 
-    if (periodoResult.recordset.length === 0) {
-      return res.status(404).json({ error: 'No se encontró la relación docente-materia' });
-    }
-
-    const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
-
-    const alumnosResult = await pool.request()
-      .input('idGrupo', sql.Int, idGrupo)
-      .input('cuatrimestre', sql.VarChar, vchCuatrimestre)
-      .input('periodo', sql.VarChar, Periodo)
-      .query(`
-        SELECT 
-          vchMatricula,
-          CONCAT(vchNombre, ' ', vchAPaterno, ' ', vchAMaterno) as nombreCompleto,
-          vchNombre,
-          vchAPaterno,
-          vchAMaterno
-        FROM tblAlumnos
-        WHERE chvGrupo = @idGrupo
-          AND vchClvCuatri = @cuatrimestre
-          AND vchPeriodo = @periodo
-        ORDER BY vchMatricula
-      `);
-
-    const alumnos = alumnosResult.recordset;
+    const alumnos = result.recordset;
     
     if (alumnos.length === 0) {
       return res.status(400).json({ error: 'No hay alumnos disponibles' });
     }
 
-    // Simular distribución aleatoria
-    const alumnosAleatorios = [...alumnos].sort(() => Math.random() - 0.5);
+    // 🎯 LÓGICA DE DISTRIBUCIÓN EN EQUIPOS (ya vienen aleatorizados del SP)
     const alumnosPorEquipo = Math.floor(alumnos.length / cantidadEquipos);
     const alumnosSobrantes = alumnos.length % cantidadEquipos;
 
@@ -2725,7 +1882,7 @@ const simularEquiposAleatorios = async (req, res) => {
       
       const integrantes = [];
       for (let j = 0; j < integrantesEnEsteEquipo; j++) {
-        integrantes.push(alumnosAleatorios[indiceAlumno]);
+        integrantes.push(alumnos[indiceAlumno]);
         indiceAlumno++;
       }
 
@@ -2749,12 +1906,21 @@ const simularEquiposAleatorios = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error al simular equipos:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    
+    // 🎯 MANEJAR ERRORES ESPECÍFICOS DEL STORED PROCEDURE
+    if (error.message && error.message.includes('No se encontró la relación docente-materia')) {
+      return res.status(404).json({ 
+        error: 'No se encontró la relación docente-materia' 
+      });
+    }
+    
+    // Error genérico del servidor
+    res.status(500).json({ 
+      error: 'Error del servidor' 
+    });
   }
 };
 
-// Obtener actividades anteriores con equipos por grupo
-// Obtener actividades anteriores con equipos por grupo - CORREGIDO
 const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
 
@@ -2763,33 +1929,12 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
     
     console.log(`🔍 Obteniendo actividades con equipos para grupo específico: ${idGrupo}`);
     
+    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo)
-      .query(`
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          a.numero_actividad,
-          i.parcial,
-          COUNT(ae.id_equipo) as total_equipos,
-          STRING_AGG(e.nombre_equipo, ', ') as nombres_equipos,
-          STRING_AGG(CAST(e.id_equipo AS VARCHAR), ',') as ids_equipos
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_actividad_equipo ae ON a.id_actividad = ae.id_actividad
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        WHERE i.vchClvTrabajador = @claveDocente
-          AND i.vchClvMateria = @claveMateria
-          AND ag.id_grupo = @idGrupo
-          AND e.id_grupo = @idGrupo  -- 🔧 FILTRO CRUCIAL: Solo equipos del grupo específico
-          AND a.id_modalidad = 2
-        GROUP BY a.id_actividad, a.titulo, a.numero_actividad, i.parcial
-        HAVING COUNT(ae.id_equipo) > 0  -- 🔧 Solo actividades que tengan equipos
-        ORDER BY a.numero_actividad DESC
-      `);
+      .execute('sp_obtenerActividadesConEquiposPorGrupo');
 
     console.log(`✅ Actividades con equipos encontradas para grupo ${idGrupo}: ${result.recordset.length}`);
     
@@ -2817,38 +1962,17 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
 // ===============================================
 
 // 🔧 CORREGIDO: Obtener datos de actividad para calificar
+
 const obtenerDatosActividad = async (req, res) => {
   const { idActividad } = req.params;
 
   try {
     const pool = await sql.connect(config);
+    
+    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          a.id_actividad,
-          a.titulo,
-          a.descripcion,
-          a.numero_actividad,
-          a.id_modalidad,
-          i.id_instrumento,
-          i.nombre as nombre_instrumento,
-          i.parcial,
-          i.valor_total,
-          ag.fecha_entrega,
-          g.vchGrupo,
-          m.vchNomMateria,
-          -- 🔧 CORREGIDO: Obtener componente de la tabla correcta
-          vce.componente as nombre_componente
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-        INNER JOIN tbl_grupos g ON ag.id_grupo = g.id_grupo
-        INNER JOIN tbl_materias m ON i.vchClvMateria = m.vchClvMateria
-        -- 🔧 CORREGIDO: LEFT JOIN con la tabla correcta
-        LEFT JOIN tbl_valor_componentes_evaluacion vce ON a.id_valor_componente = vce.id_valor_componente
-        WHERE a.id_actividad = @idActividad
-      `);
+      .execute('sp_obtenerDatosActividad');
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ error: 'Actividad no encontrada' });
@@ -2868,48 +1992,28 @@ const obtenerCriteriosActividad = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Primero obtener el instrumento de la actividad
-    const instrumentoResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (combina ambas consultas)
+    const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT i.id_instrumento
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        WHERE a.id_actividad = @idActividad
-      `);
+      .execute('sp_obtenerCriteriosActividad');
 
-    if (instrumentoResult.recordset.length === 0) {
-      return res.status(404).json({ error: 'Instrumento no encontrado' });
-    }
-
-    const idInstrumento = instrumentoResult.recordset[0].id_instrumento;
-
-    // Obtener criterios del instrumento
-    const criteriosResult = await pool.request()
-      .input('idInstrumento', sql.Int, idInstrumento)
-      .query(`
-        SELECT 
-          id_criterio,
-          nombre,
-          descripcion,
-          valor_maximo
-        FROM tbl_criterios
-        WHERE id_instrumento = @idInstrumento
-        ORDER BY id_criterio
-      `);
-
-    // Mapear los resultados con nombres consistentes
-    const criterios = criteriosResult.recordset.map(criterio => ({
-      id_criterio: criterio.id_criterio,
-      nombre_criterio: criterio.nombre,
-      descripcion: criterio.descripcion,
-      valor_maximo: criterio.valor_maximo
-    }));
-
-    res.json(criterios);
+    // ✅ Los criterios ya vienen con el formato correcto del SP
+    res.json(result.recordset);
+    
   } catch (error) {
     console.error('❌ Error al obtener criterios:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    
+    // 🎯 MANEJAR ERROR ESPECÍFICO DEL STORED PROCEDURE
+    if (error.message && error.message.includes('Instrumento no encontrado')) {
+      return res.status(404).json({ 
+        error: 'Instrumento no encontrado' 
+      });
+    }
+    
+    // Error genérico del servidor
+    res.status(500).json({ 
+      error: 'Error del servidor' 
+    });
   }
 };
 
@@ -2925,84 +2029,19 @@ const obtenerEquiposParaCalificar = async (req, res) => {
     
     console.log(`🔍 Obteniendo equipos para calificar: Actividad=${idActividad}, Grupo=${idGrupo}`);
 
-    // Primero obtener el valor total del instrumento y todos los criterios
-    const instrumentoResult = await pool.request()
-      .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          i.valor_total,
-          SUM(c.valor_maximo) as suma_maxima_criterios
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
-        WHERE a.id_actividad = @idActividad
-        GROUP BY i.valor_total
-      `);
-
-    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
-    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
-
-    // 🔧 CONSULTA CORREGIDA - USAR ID NUMÉRICO EN LUGAR DE NOMBRE
+    // 🚀 EJECUTAR EL STORED PROCEDURE (combina todas las consultas)
     const request = pool.request()
-      .input('idActividad', sql.Int, idActividad)
-      .input('valorTotal', sql.Float, valorTotal)
-      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios);
+      .input('idActividad', sql.Int, idActividad);
 
-    let whereClause = 'WHERE ae.id_actividad = @idActividad';
-
-    // 🆕 FILTRO CORREGIDO: Usar g.id_grupo en lugar de g.vchGrupo
+    // 🆕 AGREGAR FILTRO POR GRUPO SI SE PROPORCIONA
     if (idGrupo) {
-      request.input('idGrupo', sql.Int, parseInt(idGrupo)); // 🔧 CONVERTIR A INT
-      whereClause += ' AND g.id_grupo = @idGrupo'; // 🔧 USAR ID NUMÉRICO
+      request.input('idGrupo', sql.Int, parseInt(idGrupo));
       console.log(`🎯 Filtrando por ID de grupo numérico: ${idGrupo}`);
+    } else {
+      request.input('idGrupo', sql.Int, null);
     }
 
-    const result = await request.query(`
-      SELECT 
-        ae.id_actividad_equipo,
-        e.id_equipo,
-        e.nombre_equipo,
-        ae.observacion,
-        ae.id_estado,
-        g.vchGrupo, -- 🆕 INCLUIR GRUPO PARA VERIFICACIÓN
-        g.id_grupo, -- 🆕 INCLUIR ID PARA DEBUG
-        -- Integrantes del equipo
-        STUFF((
-          SELECT ', ' + al2.vchNombre + ' ' + ISNULL(al2.vchAPaterno, '')
-          FROM tbl_equipo_alumno ea2
-          INNER JOIN tblAlumnos al2 ON ea2.vchMatricula = al2.vchMatricula
-          WHERE ea2.id_equipo = e.id_equipo
-          FOR XML PATH('')
-        ), 1, 2, '') as integrantes,
-        (SELECT COUNT(*) FROM tbl_equipo_alumno ea3 WHERE ea3.id_equipo = e.id_equipo) as totalIntegrantes,
-        -- Verificar si ya está calificado
-        CASE 
-          WHEN EXISTS (
-            SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ece 
-            WHERE ece.id_actividad_equipo = ae.id_actividad_equipo
-          ) THEN 1 
-          ELSE 0 
-        END as yaCalificado,
-        -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
-        (SELECT 
-           ROUND(SUM(CAST(ece2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
-         FROM tbl_evaluacion_criterioActividadEquipo ece2
-         WHERE ece2.id_actividad_equipo = ae.id_actividad_equipo
-        ) as calificacionTotal,
-        -- 🆕 ESTADO EN TEXTO
-        CASE 
-          WHEN ae.id_estado = 1 THEN 'Pendiente'
-          WHEN ae.id_estado = 2 THEN 'Entregado'
-          WHEN ae.id_estado = 3 THEN 'No Entregado'
-          WHEN ae.id_estado = 4 THEN 'Entregado Tarde'
-          ELSE 'Sin Estado'
-        END as estadoTexto
-      FROM tbl_actividad_equipo ae
-      INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-      INNER JOIN tbl_grupos g ON e.id_grupo = g.id_grupo -- 🆕 JOIN CON GRUPOS
-      ${whereClause}
-      ORDER BY e.nombre_equipo
-    `);
+    const result = await request.execute('sp_obtenerEquiposParaCalificar');
 
     console.log(`✅ Equipos encontrados para grupo ID ${idGrupo}: ${result.recordset.length}`);
     
@@ -3014,25 +2053,7 @@ const obtenerEquiposParaCalificar = async (req, res) => {
         grupoId: e.id_grupo
       })));
     } else {
-      console.log('⚠️ No se encontraron equipos. Verificando si existen equipos en la BD...');
-      
-      // 🔍 CONSULTA DE DEBUG PARA VER QUÉ EQUIPOS EXISTEN
-      const debugResult = await pool.request()
-        .input('idActividad', sql.Int, idActividad)
-        .query(`
-          SELECT 
-            e.id_equipo,
-            e.nombre_equipo,
-            g.id_grupo,
-            g.vchGrupo,
-            ae.id_actividad_equipo
-          FROM tbl_actividad_equipo ae
-          INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-          INNER JOIN tbl_grupos g ON e.id_grupo = g.id_grupo
-          WHERE ae.id_actividad = @idActividad
-        `);
-      
-      console.log('🔍 TODOS los equipos de esta actividad:', debugResult.recordset);
+      console.log('⚠️ No se encontraron equipos para esta actividad y grupo');
     }
 
     res.json(result.recordset);
@@ -3048,61 +2069,10 @@ const obtenerAlumnosParaCalificar = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Primero obtener el valor total del instrumento y todos los criterios
-    const instrumentoResult = await pool.request()
-      .input('idActividad', sql.Int, idActividad)
-      .query(`
-        SELECT 
-          i.valor_total,
-          SUM(c.valor_maximo) as suma_maxima_criterios
-        FROM tbl_actividades a
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_criterios c ON i.id_instrumento = c.id_instrumento
-        WHERE a.id_actividad = @idActividad
-        GROUP BY i.valor_total
-      `);
-    
-    const valorTotal = instrumentoResult.recordset[0]?.valor_total || 10;
-    const sumaMaximaCriterios = instrumentoResult.recordset[0]?.suma_maxima_criterios || 10;
-
+    // 🚀 EJECUTAR EL STORED PROCEDURE (combina todas las consultas)
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
-      .input('valorTotal', sql.Float, valorTotal)
-      .input('sumaMaximaCriterios', sql.Float, sumaMaximaCriterios)
-      .query(`
-        SELECT 
-          aa.id_actividad_alumno,
-          aa.vchMatricula,
-          aa.observacion,
-          aa.id_estado, -- 🆕 INCLUIR ESTADO
-          al.vchNombre + ' ' + ISNULL(al.vchAPaterno, '') + ' ' + ISNULL(al.vchAMaterno, '') as nombreCompleto,
-          -- Verificar si ya está calificado
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad ec 
-              WHERE ec.id_actividad_alumno = aa.id_actividad_alumno
-            ) THEN 1 
-            ELSE 0 
-          END as yaCalificado,
-          -- CÁLCULO CORREGIDO: Usar la suma total de TODOS los criterios del instrumento
-          (SELECT 
-             ROUND(SUM(CAST(ec2.calificacion AS FLOAT)) / @sumaMaximaCriterios * @valorTotal, 1)
-           FROM tbl_evaluacion_criterioActividad ec2
-           WHERE ec2.id_actividad_alumno = aa.id_actividad_alumno
-          ) as calificacionTotal,
-          -- 🆕 ESTADO EN TEXTO
-          CASE 
-            WHEN aa.id_estado = 1 THEN 'Pendiente'
-            WHEN aa.id_estado = 2 THEN 'Entregado'
-            WHEN aa.id_estado = 3 THEN 'No Entregado'
-            WHEN aa.id_estado = 4 THEN 'Entregado Tarde'
-            ELSE 'Sin Estado'
-          END as estadoTexto
-        FROM tbl_actividad_alumno aa
-        INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-        WHERE aa.id_actividad = @idActividad
-        ORDER BY al.vchNombre, al.vchAPaterno
-      `);
+      .execute('sp_obtenerAlumnosParaCalificar');
 
     res.json(result.recordset);
   } catch (error) {
@@ -3111,42 +2081,26 @@ const obtenerAlumnosParaCalificar = async (req, res) => {
   }
 };
 
-// Obtener calificaciones existentes de un alumno - CORREGIDA
-// Obtener calificaciones existentes de un alumno - CORREGIDA
+
 const obtenerCalificacionesAlumno = async (req, res) => {
   const { idActividadAlumno } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // Obtener calificaciones
-    const calificacionesResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (devuelve múltiples conjuntos de resultados)
+    const result = await pool.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
-      .query(`
-        SELECT 
-          ec.id_criterio,
-          ec.calificacion,
-          c.nombre as nombre_criterio,
-          c.valor_maximo
-        FROM tbl_evaluacion_criterioActividad ec
-        INNER JOIN tbl_criterios c ON ec.id_criterio = c.id_criterio
-        WHERE ec.id_actividad_alumno = @idActividadAlumno
-        ORDER BY c.id_criterio
-      `);
+      .execute('sp_ObtenerCalificacionesAlumno');
 
-    // 🆕 OBTENER OBSERVACIÓN
-    const observacionResult = await pool.request()
-      .input('idActividadAlumno', sql.Int, idActividadAlumno)
-      .query(`
-        SELECT observacion
-        FROM tbl_actividad_alumno
-        WHERE id_actividad_alumno = @idActividadAlumno
-      `);
+    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
+    const calificaciones = result.recordsets[0]; // Primer SELECT: calificaciones
+    const observacionData = result.recordsets[1]; // Segundo SELECT: observación
 
     // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
     res.json({
-      calificaciones: calificacionesResult.recordset,
-      observacion: observacionResult.recordset[0]?.observacion || null
+      calificaciones: calificaciones,
+      observacion: observacionData[0]?.observacion || null
     });
 
   } catch (error) {
@@ -3154,7 +2108,6 @@ const obtenerCalificacionesAlumno = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 // Obtener calificaciones existentes de un equipo - CORREGIDA
 // Obtener calificaciones existentes de un equipo - CORREGIDA
 const obtenerCalificacionesEquipo = async (req, res) => {
@@ -3163,34 +2116,19 @@ const obtenerCalificacionesEquipo = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Obtener calificaciones
-    const calificacionesResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE (devuelve múltiples conjuntos de resultados)
+    const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT 
-          ece.id_criterio,
-          ece.calificacion,
-          c.nombre as nombre_criterio,
-          c.valor_maximo
-        FROM tbl_evaluacion_criterioActividadEquipo ece
-        INNER JOIN tbl_criterios c ON ece.id_criterio = c.id_criterio
-        WHERE ece.id_actividad_equipo = @idActividadEquipo
-        ORDER BY c.id_criterio
-      `);
+      .execute('sp_ObtenerCalificacionesEquipo');
 
-    // 🆕 OBTENER OBSERVACIÓN
-    const observacionResult = await pool.request()
-      .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT observacion
-        FROM tbl_actividad_equipo
-        WHERE id_actividad_equipo = @idActividadEquipo
-      `);
+    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
+    const calificaciones = result.recordsets[0]; // Primer SELECT: calificaciones
+    const observacionData = result.recordsets[1]; // Segundo SELECT: observación
 
     // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
     res.json({
-      calificaciones: calificacionesResult.recordset,
-      observacion: observacionResult.recordset[0]?.observacion || null
+      calificaciones: calificaciones,
+      observacion: observacionData[0]?.observacion || null
     });
 
   } catch (error) {
@@ -3198,6 +2136,7 @@ const obtenerCalificacionesEquipo = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
+
 // 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON ACTUALIZACIÓN DE ESTADO
 // 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON OBSERVACIONES
 const guardarCalificacionesAlumno = async (req, res) => {
@@ -3529,25 +2468,11 @@ const obtenerPeriodosDocente = async (req, res) => {
 
   try {
     const pool = await sql.connect(config);
+    
+    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
-      .query(`
-        SELECT DISTINCT
-          dm.Periodo,
-          dm.vchCuatrimestre,
-          COUNT(DISTINCT dm.vchClvMateria) as totalMaterias,
-          COUNT(DISTINCT dmg.id_grupo) as totalGrupos,
-          CASE 
-            WHEN dm.Periodo = (SELECT TOP 1 Periodo FROM tbl_docente_materia ORDER BY Periodo DESC)
-            THEN 'ACTUAL'
-            ELSE 'ANTERIOR'
-          END as estado
-        FROM tbl_docente_materia dm
-        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
-        WHERE dm.vchClvTrabajador = @clave
-        GROUP BY dm.Periodo, dm.vchCuatrimestre
-        ORDER BY dm.Periodo DESC, dm.vchCuatrimestre DESC
-      `);
+      .execute('sp_ObtenerPeriodosDocente');
 
     res.json(result.recordset);
   } catch (err) {
@@ -3555,7 +2480,6 @@ const obtenerPeriodosDocente = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-
 // Obtener materias por periodo específico
 const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
   const { clave, periodo } = req.params;
@@ -3563,31 +2487,13 @@ const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
+    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .input('periodo', sql.VarChar, periodo || '20251')
-      .query(`
-        SELECT DISTINCT
-          m.vchClvMateria,
-          m.vchNomMateria AS nombreMateria,
-          COUNT(DISTINCT g.id_grupo) AS totalGrupos,
-          COUNT(DISTINCT a.vchMatricula) AS totalAlumnos,
-          dm.vchCuatrimestre,
-          dm.Periodo
-        FROM tbl_docente_materia dm
-        JOIN tbl_materias m ON dm.vchClvMateria = m.vchClvMateria
-        LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
-        LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
-        LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
-          AND a.vchClvCuatri = dm.vchCuatrimestre
-          AND a.vchPeriodo = dm.Periodo
-        WHERE dm.vchClvTrabajador = @clave
-          AND dm.Periodo = @periodo
-        GROUP BY m.vchClvMateria, m.vchNomMateria, dm.vchCuatrimestre, dm.Periodo
-        ORDER BY m.vchNomMateria
-      `);
+      .execute('sp_ObtenerMateriasCompletasPorPeriodo');
 
-    console.log(`✅ Encontradas ${result.recordset.length} materias del periodo ${periodo}`);
+    console.log(`✅ Encontradas ${result.recordset.length} materias del periodo ${periodo || '20251'}`);
     res.json(result.recordset);
 
   } catch (err) {
@@ -3595,7 +2501,6 @@ const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-
 // 🔧 FUNCIÓN OPTIMIZADA: obtenerEstadisticasGrupo - CON SISTEMA DE ESTADOS V2
 const obtenerEstadisticasGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
@@ -3605,82 +2510,12 @@ const obtenerEstadisticasGrupo = async (req, res) => {
 
     console.log(`📊 Calculando estadísticas optimizadas para: Docente=${claveDocente}, Materia=${claveMateria}, Grupo=${idGrupo}`);
 
-    // 🎯 USAR DIRECTAMENTE LOS ESTADOS DE LAS TABLAS
+    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza toda la CTE compleja)
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo)
-      .query(`
-        WITH EstadisticasPorEstado AS (
-          SELECT 
-            a.id_actividad,
-            ag.fecha_entrega,
-            
-            -- 📊 CONTAR POR CADA ESTADO USANDO LAS TABLAS CORRECTAS
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                -- Individual: usar tbl_actividad_alumno
-                (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 1)
-              ELSE 
-                -- Equipo: usar tbl_actividad_equipo
-                (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 1)
-            END AS pendientes,
-            
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 2)
-              ELSE 
-                (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 2)
-            END AS entregados,
-            
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 3)
-              ELSE 
-                (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 3)
-            END AS noEntregados,
-            
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) FROM tbl_actividad_alumno aa WHERE aa.id_actividad = a.id_actividad AND aa.id_estado = 4)
-              ELSE 
-                (SELECT COUNT(*) FROM tbl_actividad_equipo ae WHERE ae.id_actividad = a.id_actividad AND ae.id_estado = 4)
-            END AS entregadosTarde,
-            
-            -- Verificar si ya venció
-            CASE WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 THEN 1 ELSE 0 END AS yaVencio
-            
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          WHERE i.vchClvTrabajador = @claveDocente
-            AND i.vchClvMateria = @claveMateria
-            AND ag.id_grupo = @idGrupo
-        )
-        
-        SELECT 
-          -- ✅ Actividades 100% sin pendientes
-          SUM(CASE WHEN pendientes = 0 THEN 1 ELSE 0 END) as actividadesCompletas,
-          
-          -- 📝 Total de pendientes en todas las actividades
-          SUM(pendientes) as totalPendientes,
-          
-          -- 🚨 Actividades vencidas con pendientes
-          SUM(CASE WHEN yaVencio = 1 AND pendientes > 0 THEN 1 ELSE 0 END) as actividadesVencidas,
-          
-          -- 📊 Total de actividades
-          COUNT(*) as totalActividades,
-          
-          -- 🎯 ESTADÍSTICAS ADICIONALES POR ESTADO
-          SUM(entregados) as totalEntregados,
-          SUM(noEntregados) as totalNoEntregados,
-          SUM(entregadosTarde) as totalEntregadosTarde,
-          
-          -- ⏰ Actividades activas con pendientes (no vencidas)
-          SUM(CASE WHEN yaVencio = 0 AND pendientes > 0 THEN 1 ELSE 0 END) as actividadesActivasConPendientes
-          
-        FROM EstadisticasPorEstado
-      `);
+      .execute('sp_ObtenerEstadisticasGrupo');
 
     const stats = result.recordset[0] || {
       actividadesCompletas: 0,
@@ -3720,7 +2555,6 @@ const obtenerEstadisticasGrupo = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 // Función 1: Obtener calificaciones individuales de integrantes de equipo
 const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
   const { idActividadEquipo } = req.params;
@@ -3730,115 +2564,21 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
     
     console.log(`📊 Obteniendo calificaciones individuales para equipo ID: ${idActividadEquipo}`);
 
-    // Consulta principal: obtener datos de integrantes
+    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza las 3 consultas complejas)
     const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT 
-          -- 👥 DATOS DEL EQUIPO
-          e.id_equipo,
-          e.nombre_equipo,
-          ae.observacion as observacion_equipo,
-          
-          -- 👤 DATOS DEL ALUMNO
-          ea.vchMatricula,
-          CONCAT(al.vchNombre, ' ', ISNULL(al.vchAPaterno, ''), ' ', ISNULL(al.vchAMaterno, '')) as nombreCompleto,
-          al.vchNombre,
-          al.vchAPaterno,
-          al.vchAMaterno,
-          
-          -- 📝 DATOS DE ACTIVIDAD INDIVIDUAL
-          aa.id_actividad_alumno,
-          aa.observacion as observacion_individual,
-          aa.id_estado as estado_individual,
-          
-          -- 📊 CALIFICACIÓN TOTAL INDIVIDUAL
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad eca_check 
-              WHERE eca_check.id_actividad_alumno = aa.id_actividad_alumno
-            ) THEN 
-              (SELECT 
-                 ROUND(
-                   SUM(CAST(eca2.calificacion AS FLOAT)) / 
-                   (SELECT SUM(c.valor_maximo) FROM tbl_criterios c 
-                    INNER JOIN tbl_actividades a2 ON c.id_instrumento = a2.id_instrumento
-                    WHERE a2.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)) *
-                   (SELECT i.valor_total FROM tbl_actividades a3 
-                    INNER JOIN tbl_instrumento i ON a3.id_instrumento = i.id_instrumento
-                    WHERE a3.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo))
-                 , 1)
-               FROM tbl_evaluacion_criterioActividad eca2
-               WHERE eca2.id_actividad_alumno = aa.id_actividad_alumno
-              )
-            ELSE 0
-          END as calificacionTotalIndividual,
-          
-          -- 🎯 ESTADO EN TEXTO
-          CASE 
-            WHEN aa.id_estado = 1 THEN 'Pendiente'
-            WHEN aa.id_estado = 2 THEN 'Entregado'
-            WHEN aa.id_estado = 3 THEN 'No Entregado'
-            WHEN aa.id_estado = 4 THEN 'Entregado Tarde'
-            ELSE 'Sin Estado'
-          END as estadoTexto,
-          
-          -- ✅ VERIFICAR SI TIENE CALIFICACIONES
-          CASE 
-            WHEN EXISTS (
-              SELECT 1 FROM tbl_evaluacion_criterioActividad eca2 
-              WHERE eca2.id_actividad_alumno = aa.id_actividad_alumno
-            ) THEN 1 
-            ELSE 0 
-          END as tieneCalificacionIndividual
+      .execute('sp_ObtenerCalificacionesIntegrantesEquipo');
 
-        FROM tbl_actividad_equipo ae
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        INNER JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
-        INNER JOIN tblAlumnos al ON ea.vchMatricula = al.vchMatricula
-        LEFT JOIN tbl_actividad_alumno aa ON aa.vchMatricula = ea.vchMatricula 
-          AND aa.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)
-        WHERE ae.id_actividad_equipo = @idActividadEquipo
-        ORDER BY al.vchNombre, al.vchAPaterno
-      `);
+    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
+    const integrantesData = result.recordsets[0]; // Primer SELECT: datos principales
+    const calificacionesDetalladas = result.recordsets[1]; // Segundo SELECT: calificaciones por criterio
 
-    // Consulta secundaria: obtener calificaciones detalladas por criterio
-    const calificacionesDetalladas = await pool.request()
-      .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT 
-          ea.vchMatricula,
-          eca.id_criterio,
-          eca.calificacion,
-          c.nombre as nombre_criterio,
-          c.valor_maximo
-        FROM tbl_actividad_equipo ae
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        INNER JOIN tbl_equipo_alumno ea ON e.id_equipo = ea.id_equipo
-        INNER JOIN tbl_actividad_alumno aa ON aa.vchMatricula = ea.vchMatricula 
-          AND aa.id_actividad = (SELECT id_actividad FROM tbl_actividad_equipo WHERE id_actividad_equipo = @idActividadEquipo)
-        INNER JOIN tbl_evaluacion_criterioActividad eca ON aa.id_actividad_alumno = eca.id_actividad_alumno
-        INNER JOIN tbl_criterios c ON eca.id_criterio = c.id_criterio
-        WHERE ae.id_actividad_equipo = @idActividadEquipo
-        ORDER BY ea.vchMatricula, c.id_criterio
-      `);
+    // Obtener valor total del instrumento (se puede inferir o agregar al SP)
+    const valorTotal = 10; // Valor por defecto o se puede calcular desde los datos
 
-    // Obtener valor total del instrumento
-    const valorTotalResult = await pool.request()
-      .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT i.valor_total
-        FROM tbl_actividad_equipo ae
-        INNER JOIN tbl_actividades a ON ae.id_actividad = a.id_actividad
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        WHERE ae.id_actividad_equipo = @idActividadEquipo
-      `);
-
-    const valorTotal = valorTotalResult.recordset[0]?.valor_total || 10;
-
-    // 📊 ESTRUCTURAR DATOS POR INTEGRANTE
-    const integrantes = result.recordset.map(integrante => {
-      const calificacionesPorCriterio = calificacionesDetalladas.recordset
+    // 📊 ESTRUCTURAR DATOS POR INTEGRANTE (misma lógica que antes)
+    const integrantes = integrantesData.map(integrante => {
+      const calificacionesPorCriterio = calificacionesDetalladas
         .filter(cal => cal.vchMatricula === integrante.vchMatricula)
         .map(cal => ({
           id_criterio: cal.id_criterio,
@@ -3855,7 +2595,7 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
       };
     });
 
-    // 🎯 CALCULAR ESTADÍSTICAS DEL EQUIPO
+    // 🎯 CALCULAR ESTADÍSTICAS DEL EQUIPO (misma lógica que antes)
     const integrantesConCalificacion = integrantes.filter(i => i.tieneCalificacionIndividual);
     const estadisticasEquipo = {
       totalIntegrantes: integrantes.length,
@@ -3872,12 +2612,12 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
     console.log(`✅ Obtenidas calificaciones de ${integrantes.length} integrantes`);
     console.log(`📊 Promedio del equipo: ${estadisticasEquipo.promedioEquipo}`);
 
-    // 🎯 RESPUESTA ESTRUCTURADA
+    // 🎯 RESPUESTA ESTRUCTURADA (misma estructura que antes)
     res.json({
       equipo: {
-        id_equipo: result.recordset[0]?.id_equipo,
-        nombre_equipo: result.recordset[0]?.nombre_equipo,
-        observacion_equipo: result.recordset[0]?.observacion_equipo
+        id_equipo: integrantesData[0]?.id_equipo,
+        nombre_equipo: integrantesData[0]?.nombre_equipo,
+        observacion_equipo: integrantesData[0]?.observacion_equipo
       },
       integrantes,
       estadisticasEquipo,
@@ -3904,22 +2644,12 @@ const obtenerComparativaEquipoIndividual = async (req, res) => {
     
     console.log(`📊 Generando comparativa equipo vs individual para ID: ${idActividadEquipo}`);
 
-    // Obtener calificación general del equipo
-    const calificacionEquipoResult = await pool.request()
+    // 🚀 EJECUTAR EL STORED PROCEDURE
+    const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT 
-          e.nombre_equipo,
-          ISNULL(SUM(ecae.calificacion), 0) as calificacionTotalEquipo,
-          COUNT(ecae.id_criterio) as criteriosCalificados
-        FROM tbl_actividad_equipo ae
-        INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-        LEFT JOIN tbl_evaluacion_criterioActividadEquipo ecae ON ae.id_actividad_equipo = ecae.id_actividad_equipo
-        WHERE ae.id_actividad_equipo = @idActividadEquipo
-        GROUP BY e.nombre_equipo
-      `);
+      .execute('sp_ObtenerComparativaEquipoIndividual');
 
-    const calificacionEquipo = calificacionEquipoResult.recordset[0] || {
+    const calificacionEquipo = result.recordset[0] || {
       nombre_equipo: 'Equipo',
       calificacionTotalEquipo: 0,
       criteriosCalificados: 0
@@ -3935,7 +2665,6 @@ const obtenerComparativaEquipoIndividual = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 const obtenerEstadisticasCentroControl = async (req, res) => {
   const { claveDocente, claveMateria } = req.params;
 
@@ -3944,130 +2673,11 @@ const obtenerEstadisticasCentroControl = async (req, res) => {
     
     console.log(`📊 Obteniendo estadísticas REALES: Docente=${claveDocente}, Materia=${claveMateria}`);
 
+    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza toda la CTE súper compleja)
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
-      .query(`
-        WITH EstadisticasActividades AS (
-          SELECT 
-            a.id_actividad,
-            ag.id_grupo,
-            ag.fecha_entrega,
-            i.parcial,
-            
-            -- 🎯 CALCULAR SI LA ACTIVIDAD ESTÁ POR CALIFICAR
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                -- Individual: buscar alumnos entregados sin calificar
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_alumno aa 
-                 WHERE aa.id_actividad = a.id_actividad 
-                   AND aa.id_estado = 2 -- Entregado
-                   AND NOT EXISTS (
-                     SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
-                     WHERE eca.id_actividad_alumno = aa.id_actividad_alumno
-                   )
-                )
-              ELSE 
-                -- Equipo: buscar equipos entregados sin calificar
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_equipo ae 
-                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                 INNER JOIN tbl_docente_materia_grupo dmg ON e.id_grupo = dmg.id_grupo
-                 INNER JOIN tbl_docente_materia dm ON dmg.id_DocenteMateria = dm.idDocenteMateria
-                 WHERE ae.id_actividad = a.id_actividad 
-                   AND ae.id_estado = 2 -- Entregado
-                   AND dm.vchClvTrabajador = @claveDocente
-                   AND dm.vchClvMateria = @claveMateria
-                   AND NOT EXISTS (
-                     SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ecae 
-                     WHERE ecae.id_actividad_equipo = ae.id_actividad_equipo
-                   )
-                )
-            END AS entregas_por_calificar,
-            
-            -- 🚨 CALCULAR SI LA ACTIVIDAD ES URGENTE
-            CASE 
-              WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) BETWEEN -24 AND 48 THEN 1
-              ELSE 0
-            END AS es_urgente,
-            
-            -- 📊 CALCULAR PENDIENTES
-            CASE 
-              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_alumno aa 
-                 INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
-                 WHERE aa.id_actividad = a.id_actividad 
-                   AND aa.id_estado = 1 -- Pendiente
-                   AND al.chvGrupo = ag.id_grupo
-                )
-              ELSE 
-                (SELECT COUNT(*) 
-                 FROM tbl_actividad_equipo ae 
-                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
-                 WHERE ae.id_actividad = a.id_actividad 
-                   AND ae.id_estado = 1 -- Pendiente
-                   AND e.id_grupo = ag.id_grupo
-                )
-            END AS pendientes_grupo
-
-          FROM tbl_actividades a
-          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
-          WHERE i.vchClvTrabajador = @claveDocente
-            AND i.vchClvMateria = @claveMateria
-        ),
-        
-        ResumenGrupos AS (
-          SELECT 
-            COUNT(DISTINCT dmg.id_grupo) as total_grupos,
-            COUNT(DISTINCT a.vchMatricula) as total_alumnos
-          FROM tbl_docente_materia dm
-          LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
-          LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
-          LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
-            AND a.vchClvCuatri = dm.vchCuatrimestre
-            AND a.vchPeriodo = dm.Periodo
-          WHERE dm.vchClvTrabajador = @claveDocente
-            AND dm.vchClvMateria = @claveMateria
-        )
-        
-        SELECT 
-          -- 📊 ESTADÍSTICAS PRINCIPALES REALES
-          rg.total_grupos,
-          rg.total_alumnos,
-          
-          -- 📝 POR CALIFICAR: Total real de entregas que necesitan calificación
-          ISNULL(SUM(ea.entregas_por_calificar), 0) as total_por_calificar,
-          
-          -- 🚨 URGENTES: Actividades reales con fechas próximas o vencidas recientemente
-          COUNT(CASE WHEN ea.es_urgente = 1 AND ea.pendientes_grupo > 0 THEN 1 END) as actividades_urgentes,
-          
-          -- 📋 ACTIVIDADES TOTALES REALES
-          COUNT(DISTINCT ea.id_actividad) as total_actividades,
-          
-          -- ⏰ PRÓXIMAS A VENCER (siguiente 48 horas)
-          COUNT(CASE 
-            WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) BETWEEN 0 AND 48 
-            AND ea.pendientes_grupo > 0 
-            THEN 1 
-          END) as proximas_a_vencer,
-          
-          -- 🔥 ACTIVIDADES CRÍTICAS (vencidas con pendientes)
-          COUNT(CASE 
-            WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 
-            AND ea.pendientes_grupo > 0 
-            THEN 1 
-          END) as actividades_criticas
-          
-        FROM EstadisticasActividades ea
-        INNER JOIN tbl_actividades a ON ea.id_actividad = a.id_actividad
-        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
-        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad AND ag.id_grupo = ea.id_grupo
-        CROSS JOIN ResumenGrupos rg
-        GROUP BY rg.total_grupos, rg.total_alumnos
-      `);
+      .execute('sp_ObtenerEstadisticasCentroControl');
 
     const estadisticas = result.recordset[0] || {
       total_grupos: 0,
@@ -4106,7 +2716,6 @@ const obtenerEstadisticasCentroControl = async (req, res) => {
     });
   }
 };
-
 // ===============================================
 // EXPORTS COMPLETOS ACTUALIZADOS Y CORREGIDOS
 // ===============================================
