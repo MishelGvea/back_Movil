@@ -1,5 +1,7 @@
 const { sql, config } = require('../db/sqlConfig');
 
+
+
 // ===============================================
 // FUNCIONES EXISTENTES (SIN MODIFICAR)
 // ===============================================
@@ -101,6 +103,71 @@ const obtenerMateriasCompletas = async (req, res) => {
 };
 
 // 🆕 FUNCIÓN AUXILIAR: Obtener información del periodo actual
+const obtenerPeriodoActualInterno = async () => {
+  try {
+    const pool = await sql.connect(config);
+    
+    // Obtener el periodo más reciente usando tu SP existente
+    const periodoResult = await pool.request().query(`EXEC sp_ObtenerPeriodoActual;`);
+    
+    if (periodoResult.recordset.length === 0) {
+      console.error('❌ No se encontraron periodos en la BD');
+      return null;
+    }
+
+    const periodoActual = periodoResult.recordset[0].Periodo.toString();
+    console.log(`📅 Periodo obtenido de BD: ${periodoActual}`);
+    
+    return periodoActual;
+
+  } catch (err) {
+    console.error('❌ Error al obtener periodo actual interno:', err);
+    return null;
+  }
+};
+
+/**
+ * Validar y obtener periodo correcto (con fallback)
+ * @param {string} periodoRecibido - Periodo recibido del frontend
+ * @returns {Promise<string>} Periodo validado
+ */
+const validarPeriodo = async (periodoRecibido) => {
+  // Si se envía 'auto' o no se envía periodo, obtener de BD
+  if (!periodoRecibido || 
+      periodoRecibido === 'auto' || 
+      periodoRecibido === 'null' || 
+      periodoRecibido === 'undefined') {
+    
+    const periodoBD = await obtenerPeriodoActualInterno();
+    if (periodoBD) {
+      console.log(`✅ Usando periodo automático de BD: ${periodoBD}`);
+      return periodoBD;
+    }
+  }
+
+  // Si se envía un periodo específico, validarlo
+  if (periodoRecibido && periodoRecibido.length === 5) {
+    const año = parseInt(periodoRecibido.substring(0, 4));
+    const cuatrimestre = parseInt(periodoRecibido.substring(4));
+    const añoActual = new Date().getFullYear();
+    
+    // Validar rango razonable
+    if (año >= 2020 && año <= añoActual + 2 && [1, 2, 3].includes(cuatrimestre)) {
+      console.log(`✅ Usando periodo específico validado: ${periodoRecibido}`);
+      return periodoRecibido;
+    }
+  }
+
+  // Fallback: obtener de BD
+  console.log(`⚠️ Periodo inválido: ${periodoRecibido}, obteniendo de BD...`);
+  const periodoBD = await obtenerPeriodoActualInterno();
+  return periodoBD || '20252'; // Último fallback
+};
+
+/**
+ * Endpoint para obtener información completa del periodo actual
+ * Tu función original mejorada
+ */
 const obtenerPeriodoActual = async (req, res) => {
   try {
     const pool = await sql.connect(config);
@@ -112,30 +179,32 @@ const obtenerPeriodoActual = async (req, res) => {
       return res.status(404).json({ mensaje: 'No se encontraron periodos' });
     }
 
-    const periodoActual = periodoResult.recordset[0].Periodo;
+    const periodoActual = periodoResult.recordset[0].Periodo.toString();
     
     // Extraer año y cuatrimestre del periodo
-    const año = periodoActual.toString().substring(0, 4);
-    const cuatrimestreNumero = periodoActual.toString().substring(4, 5);
+    const año = periodoActual.substring(0, 4);
+    const cuatrimestreNumero = periodoActual.substring(4, 5);
     
     // Obtener información del cuatrimestre desde tbl_periodos
     const cuatrimestreInfo = await pool.request()
       .input('idPeriodo', sql.Int, parseInt(cuatrimestreNumero))
-      .query(`
-        EXEC sp_CuatrimestreInfo
-      `);
+      .query(`EXEC sp_CuatrimestreInfo`);
 
     const infoCompleta = {
       periodoActual,
       año,
       cuatrimestreNumero,
       descripcion: `Año ${año}, Cuatrimestre ${cuatrimestreNumero}`,
+      // 🆕 Información adicional útil
+      esPeriodoAutomatico: true,
+      fechaConsulta: new Date().toISOString(),
       ...(cuatrimestreInfo.recordset.length > 0 && {
         mesInicia: cuatrimestreInfo.recordset[0].mesInicia,
         mesTermina: cuatrimestreInfo.recordset[0].mesTermina
       })
     };
 
+    console.log(`📅 Periodo actual consultado vía endpoint: ${periodoActual}`);
     res.json(infoCompleta);
 
   } catch (err) {
@@ -169,9 +238,18 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
 
 // Obtener todos los componentes de un docente/materia/parcial/periodo
 const obtenerComponentesPorMateria = async (req, res) => {
-  const { claveMateria, parcial, periodo, claveDocente } = req.params;
+  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
 
   try {
+    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
     const pool = await sql.connect(config);
     
     console.log(`🔍 Buscando componentes: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}, Docente=${claveDocente}`);
@@ -179,14 +257,14 @@ const obtenerComponentesPorMateria = async (req, res) => {
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_ObtenerComponentesMateria`);
 
     // Calcular suma total de valores
     const sumaTotal = result.recordset.reduce((suma, comp) => suma + (comp.valor_componente || 0), 0);
 
-    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal}%`);
+    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal}% (Periodo BD: ${periodo})`);
     
     res.json({
       componentes: result.recordset,
@@ -198,12 +276,17 @@ const obtenerComponentesPorMateria = async (req, res) => {
         exceso: sumaTotal > 100 ? parseFloat((sumaTotal - 100).toFixed(2)) : 0,
         faltante: sumaTotal < 100 ? parseFloat((100 - sumaTotal).toFixed(2)) : 0
       },
-      // 🆕 ESTADÍSTICAS ADICIONALES
       estadisticas: {
         totalComponentes: result.recordset.length,
         mayorComponente: result.recordset.length > 0 ? Math.max(...result.recordset.map(c => c.valor_componente)) : 0,
         menorComponente: result.recordset.length > 0 ? Math.min(...result.recordset.map(c => c.valor_componente)) : 0,
         promedioComponente: result.recordset.length > 0 ? parseFloat((sumaTotal / result.recordset.length).toFixed(2)) : 0
+      },
+      // 🆕 INFORMACIÓN DEL PERIODO USADO (de BD)
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
       }
     });
 
@@ -217,18 +300,27 @@ const crearComponente = async (req, res) => {
   const { 
     claveMateria, 
     parcial, 
-    periodo, 
+    periodo: periodoRecibido, 
     claveDocente,
     nombreComponente,
     valorComponente 
   } = req.body;
 
   try {
+    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
     const pool = await sql.connect(config);
     
-    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente}%`);
+    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente}% (Periodo BD: ${periodo})`);
 
-    // 1. 🛡️ VALIDACIONES BÁSICAS
+    // 1. 🛡️ VALIDACIONES BÁSICAS (igual que antes)
     if (!nombreComponente || !nombreComponente.trim()) {
       return res.status(400).json({ 
         error: 'El nombre del componente es obligatorio' 
@@ -248,11 +340,11 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 2. 🔍 VERIFICAR SUMA ACTUAL DE COMPONENTES EXISTENTES
+    // 2. 🔍 VERIFICAR SUMA ACTUAL DE COMPONENTES EXISTENTES (con periodo de BD)
     const sumaActualResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_sumaComponentes`);
 
@@ -260,9 +352,7 @@ const crearComponente = async (req, res) => {
     const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
     const nuevaSuma = parseFloat((sumaActual + valor).toFixed(2));
 
-    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO
-    
-    // 3.1 No exceder 100%
+    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO (igual que antes)
     if (nuevaSuma > 100) {
       return res.status(400).json({ 
         error: `❌ La suma no puede exceder 100%`,
@@ -277,7 +367,6 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 3.2 Validar que no sea un valor muy pequeño si ya hay componentes
     if (totalComponentes > 0 && valor < 5) {
       return res.status(400).json({ 
         error: '⚠️ Valor muy pequeño',
@@ -289,7 +378,6 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 3.3 Validar límite de componentes por parcial
     if (totalComponentes >= 8) {
       return res.status(400).json({ 
         error: '📊 Límite de componentes alcanzado',
@@ -301,11 +389,11 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 4. 🔒 VERIFICAR NOMBRE ÚNICO - CONSULTA CORREGIDA
+    // 4. 🔒 VERIFICAR NOMBRE ÚNICO
     const existeResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .execute(`sp_existeResult`);
@@ -326,13 +414,12 @@ const crearComponente = async (req, res) => {
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
       .input('claveDocente', sql.VarChar, claveDocente)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .input('valorComponente', sql.Decimal(4,2), valor)
       .execute(`sp_InsertarComponenteEvaluacion`);
 
-    console.log(`✅ Componente creado: ${nombreComponente} - ${valor}%`);
-    console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
+    console.log(`✅ Componente creado: ${nombreComponente} - ${valor}% (Periodo BD: ${periodo})`);
 
     // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
     const respuesta = {
@@ -347,10 +434,16 @@ const crearComponente = async (req, res) => {
         disponible: parseFloat((100 - nuevaSuma).toFixed(2)),
         componentesTotales: totalComponentes + 1,
         progreso: parseFloat(((nuevaSuma / 100) * 100).toFixed(1))
+      },
+      // 🆕 INFO DEL PERIODO (de BD)
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
       }
     };
 
-    // 🔮 RECOMENDACIONES INTELIGENTES
+    // 🔮 RECOMENDACIONES INTELIGENTES (igual que antes)
     if (nuevaSuma < 100) {
       const faltante = 100 - nuevaSuma;
       respuesta.recomendacion = {
@@ -377,6 +470,41 @@ const crearComponente = async (req, res) => {
   }
 };
 
+// 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
+const validarParcial = async (req, res) => {
+  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
+
+  try {
+    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
+    const pool = await sql.connect(config);
+    
+    // Aquí puedes implementar lógica de recomendaciones específicas
+    const recomendaciones = [];
+    
+    console.log(`🔍 Validando parcial: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}`);
+    
+    res.json({
+      recomendaciones,
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error al validar parcial:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
 // Modificar un componente existente
 const modificarComponente = async (req, res) => {
   const { idComponente } = req.params;
@@ -899,16 +1027,28 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
 };
 
 // 🆕 FUNCIÓN: Clonar componentes de un parcial a otro
+// 🔧 REEMPLAZAR tu función clonarComponentesParcial con esta versión:
 const clonarComponentesParcial = async (req, res) => {
   const { 
     claveMateria, 
     parcialOrigen, 
     parcialDestino, 
-    periodo, 
+    periodo: periodoRecibido, // 🆕 CAMBIAR NOMBRE
     claveDocente 
   } = req.body;
 
   try {
+    // 🆕 USAR PERIODO AUTOMÁTICO DE BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+
+    console.log(`📋 Clonando componentes: ${parcialOrigen} → ${parcialDestino} (Periodo BD: ${periodo})`);
+
     const pool = await sql.connect(config);
 
     // 🚀 EJECUTAR EL STORED PROCEDURE (hace todo: verifica, valida y clona)
@@ -916,7 +1056,7 @@ const clonarComponentesParcial = async (req, res) => {
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialOrigen', sql.Int, parcialOrigen)
       .input('parcialDestino', sql.Int, parcialDestino)
-      .input('periodo', sql.VarChar, periodo)
+      .input('periodo', sql.VarChar, periodo) // 🆕 USAR PERIODO VALIDADO
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_componentesClonados');
 
@@ -926,7 +1066,13 @@ const clonarComponentesParcial = async (req, res) => {
     if (respuesta.resultado === 'ERROR') {
       return res.status(400).json({ 
         error: respuesta.mensaje,
-        componentesClonados: respuesta.componentesClonados || 0
+        componentesClonados: respuesta.componentesClonados || 0,
+        // 🆕 INFORMACIÓN DEL PERIODO
+        periodoInfo: {
+          periodoUsado: periodo,
+          esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+          origen: 'baseDatos'
+        }
       });
     }
 
@@ -939,11 +1085,19 @@ const clonarComponentesParcial = async (req, res) => {
     // 🧮 CALCULAR SUMA TOTAL
     const sumaTotal = componentesClonados.reduce((sum, c) => sum + parseFloat(c.valor || 0), 0);
 
+    console.log(`✅ Clonación completada: ${componentesClonados.length} componentes (Periodo BD: ${periodo})`);
+
     res.json({
       mensaje: respuesta.mensaje,
       componentesClonados,
       total: componentesClonados.length,
-      sumaTotal: parseFloat(sumaTotal.toFixed(2))
+      sumaTotal: parseFloat(sumaTotal.toFixed(2)),
+      // 🆕 INFORMACIÓN DEL PERIODO USADO
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
+      }
     });
 
   } catch (error) {
