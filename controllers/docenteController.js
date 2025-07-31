@@ -236,12 +236,13 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
 // 🆕 FUNCIONES CRUD PARA GESTIÓN DE COMPONENTES
 // ===============================================
 
+
 // Obtener todos los componentes de un docente/materia/parcial/periodo
 const obtenerComponentesPorMateria = async (req, res) => {
   const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
 
   try {
-    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    // USAR TU LÓGICA DE PERIODO CON BD
     const periodo = await validarPeriodo(periodoRecibido);
     
     if (!periodo) {
@@ -257,24 +258,24 @@ const obtenerComponentesPorMateria = async (req, res) => {
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
+      .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_ObtenerComponentesMateria`);
 
-    // Calcular suma total de valores
+    // 🆕 CAMBIO: Calcular suma total de puntos (máximo 10)
     const sumaTotal = result.recordset.reduce((suma, comp) => suma + (comp.valor_componente || 0), 0);
 
-    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal}% (Periodo BD: ${periodo})`);
+    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal} pts (Periodo BD: ${periodo})`);
     
     res.json({
       componentes: result.recordset,
       sumaTotal: parseFloat(sumaTotal.toFixed(2)),
-      disponible: parseFloat((100 - sumaTotal).toFixed(2)),
+      disponible: parseFloat((10 - sumaTotal).toFixed(2)), // 🆕 CAMBIO: máximo 10 en lugar de 100
       validacion: {
-        esValido: sumaTotal <= 100,
-        esCompleto: sumaTotal === 100,
-        exceso: sumaTotal > 100 ? parseFloat((sumaTotal - 100).toFixed(2)) : 0,
-        faltante: sumaTotal < 100 ? parseFloat((100 - sumaTotal).toFixed(2)) : 0
+        esValido: sumaTotal <= 10, // 🆕 CAMBIO: validar contra 10
+        esCompleto: sumaTotal === 10, // 🆕 CAMBIO: completo cuando suma 10
+        exceso: sumaTotal > 10 ? parseFloat((sumaTotal - 10).toFixed(2)) : 0, // 🆕 CAMBIO
+        faltante: sumaTotal < 10 ? parseFloat((10 - sumaTotal).toFixed(2)) : 0 // 🆕 CAMBIO
       },
       estadisticas: {
         totalComponentes: result.recordset.length,
@@ -282,7 +283,6 @@ const obtenerComponentesPorMateria = async (req, res) => {
         menorComponente: result.recordset.length > 0 ? Math.min(...result.recordset.map(c => c.valor_componente)) : 0,
         promedioComponente: result.recordset.length > 0 ? parseFloat((sumaTotal / result.recordset.length).toFixed(2)) : 0
       },
-      // 🆕 INFORMACIÓN DEL PERIODO USADO (de BD)
       periodoInfo: {
         periodoUsado: periodo,
         esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
@@ -295,7 +295,6 @@ const obtenerComponentesPorMateria = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 const crearComponente = async (req, res) => {
   const { 
     claveMateria, 
@@ -307,7 +306,7 @@ const crearComponente = async (req, res) => {
   } = req.body;
 
   try {
-    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    // USAR TU LÓGICA DE PERIODO CON BD
     const periodo = await validarPeriodo(periodoRecibido);
     
     if (!periodo) {
@@ -318,9 +317,9 @@ const crearComponente = async (req, res) => {
     
     const pool = await sql.connect(config);
     
-    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente}% (Periodo BD: ${periodo})`);
+    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente} pts (Periodo BD: ${periodo})`);
 
-    // 1. 🛡️ VALIDACIONES BÁSICAS (igual que antes)
+    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
     if (!nombreComponente || !nombreComponente.trim()) {
       return res.status(400).json({ 
         error: 'El nombre del componente es obligatorio' 
@@ -334,17 +333,18 @@ const crearComponente = async (req, res) => {
     }
 
     const valor = parseFloat(valorComponente);
-    if (valor <= 0 || valor > 100) {
+    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
+    if (valor <= 0 || valor > 10) {
       return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 100' 
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
       });
     }
 
-    // 2. 🔍 VERIFICAR SUMA ACTUAL DE COMPONENTES EXISTENTES (con periodo de BD)
+    // 2. 🔍 VERIFICAR SUMA ACTUAL DE COMPONENTES EXISTENTES
     const sumaActualResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
+      .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_sumaComponentes`);
 
@@ -352,28 +352,30 @@ const crearComponente = async (req, res) => {
     const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
     const nuevaSuma = parseFloat((sumaActual + valor).toFixed(2));
 
-    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO (igual que antes)
-    if (nuevaSuma > 100) {
+    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO ACTUALIZADAS
+    // 🆕 CAMBIO: validar contra suma máxima de 10
+    if (nuevaSuma > 10) {
       return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 100%`,
+        error: `❌ La suma no puede exceder 10 puntos`,
         detalles: {
           sumaActual: parseFloat(sumaActual.toFixed(2)),
           valorIntentando: valor,
           sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 100).toFixed(2)),
-          disponible: parseFloat((100 - sumaActual).toFixed(2)),
-          sugerencia: `El valor máximo permitido es ${(100 - sumaActual).toFixed(2)}%`
+          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
+          disponible: parseFloat((10 - sumaActual).toFixed(2)),
+          sugerencia: `El valor máximo permitido es ${(10 - sumaActual).toFixed(2)} puntos`
         }
       });
     }
 
-    if (totalComponentes > 0 && valor < 5) {
+    // 🆕 CAMBIO: ajustar validación de valor mínimo para sistema de puntos
+    if (totalComponentes > 0 && valor < 0.5) {
       return res.status(400).json({ 
         error: '⚠️ Valor muy pequeño',
         detalles: {
-          valorMinimo: 5,
+          valorMinimo: 0.5,
           valorIntentando: valor,
-          razon: 'Para mantener un balance adecuado, cada componente debe valer al menos 5%'
+          razon: 'Para mantener un balance adecuado, cada componente debe valer al menos 0.5 puntos'
         }
       });
     }
@@ -393,7 +395,7 @@ const crearComponente = async (req, res) => {
     const existeResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
+      .input('vchPeriodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .execute(`sp_existeResult`);
@@ -414,14 +416,14 @@ const crearComponente = async (req, res) => {
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
       .input('claveDocente', sql.VarChar, claveDocente)
-      .input('vchPeriodo', sql.VarChar, periodo) // 🆕 Usar periodo de BD
+      .input('vchPeriodo', sql.VarChar, periodo)
       .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
       .input('valorComponente', sql.Decimal(4,2), valor)
       .execute(`sp_InsertarComponenteEvaluacion`);
 
-    console.log(`✅ Componente creado: ${nombreComponente} - ${valor}% (Periodo BD: ${periodo})`);
+    console.log(`✅ Componente creado: ${nombreComponente} - ${valor} pts (Periodo BD: ${periodo})`);
 
-    // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
+    // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES ACTUALIZADAS
     const respuesta = {
       mensaje: '✅ Componente creado correctamente',
       componente: {
@@ -431,11 +433,10 @@ const crearComponente = async (req, res) => {
       estadisticas: {
         sumaAnterior: parseFloat(sumaActual.toFixed(2)),
         sumaNueva: nuevaSuma,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2)),
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
         componentesTotales: totalComponentes + 1,
-        progreso: parseFloat(((nuevaSuma / 100) * 100).toFixed(1))
+        progreso: parseFloat(((nuevaSuma / 10) * 100).toFixed(1)) // 🆕 CAMBIO: progreso sobre 10
       },
-      // 🆕 INFO DEL PERIODO (de BD)
       periodoInfo: {
         periodoUsado: periodo,
         esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
@@ -443,21 +444,21 @@ const crearComponente = async (req, res) => {
       }
     };
 
-    // 🔮 RECOMENDACIONES INTELIGENTES (igual que antes)
-    if (nuevaSuma < 100) {
-      const faltante = 100 - nuevaSuma;
+    // 🔮 RECOMENDACIONES INTELIGENTES ACTUALIZADAS
+    if (nuevaSuma < 10) {
+      const faltante = 10 - nuevaSuma;
       respuesta.recomendacion = {
         tipo: 'completar',
-        mensaje: `Te faltan ${faltante.toFixed(2)}% para completar el 100%`,
+        mensaje: `Te faltan ${faltante.toFixed(2)} puntos para completar los 10 puntos`,
         sugerencias: [
-          faltante > 20 ? 'Considera agregar un componente de "Examen" o "Proyecto"' : null,
-          faltante <= 20 && faltante > 10 ? 'Puedes agregar "Participación" o "Tareas"' : null,
-          faltante <= 10 ? 'Un componente pequeño como "Asistencia" completaría el 100%' : null
+          faltante > 4 ? 'Considera agregar un componente de "Examen" o "Proyecto"' : null,
+          faltante <= 4 && faltante > 2 ? 'Puedes agregar "Participación" o "Tareas"' : null,
+          faltante <= 2 ? 'Un componente pequeño como "Asistencia" completaría los 10 puntos' : null
         ].filter(Boolean)
       };
-    } else if (nuevaSuma === 100) {
+    } else if (nuevaSuma === 10) {
       respuesta.felicitacion = {
-        mensaje: '🎉 ¡Perfecto! Has completado el 100% de la ponderación',
+        mensaje: '🎉 ¡Perfecto! Has completado los 10 puntos de la ponderación',
         estado: 'completo'
       };
     }
@@ -469,7 +470,6 @@ const crearComponente = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 // 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
 const validarParcial = async (req, res) => {
   const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
@@ -515,7 +515,7 @@ const modificarComponente = async (req, res) => {
     
     console.log(`🔄 Modificando componente ID: ${idComponente}`);
 
-    // 1. 🛡️ VALIDACIONES BÁSICAS
+    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
     if (!nombreComponente || !nombreComponente.trim()) {
       return res.status(400).json({ 
         error: 'El nombre del componente es obligatorio' 
@@ -523,9 +523,10 @@ const modificarComponente = async (req, res) => {
     }
 
     const valor = parseFloat(valorComponente);
-    if (isNaN(valor) || valor <= 0 || valor > 100) {
+    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
+    if (isNaN(valor) || valor <= 0 || valor > 10) {
       return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 100' 
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
       });
     }
 
@@ -548,25 +549,25 @@ const modificarComponente = async (req, res) => {
     const { totalActividades, titulosActividades } = actividadesResult.recordset[0];
 
     // 3.1 Si hay actividades, restringir cambios drásticos
+    // 🆕 CAMBIO: ajustar límite de cambio para sistema de puntos (3 puntos máximo)
     if (totalActividades > 0) {
       const cambioValor = Math.abs(valor - componenteActual.valor_componente);
       
-      if (cambioValor > 15) {
+      if (cambioValor > 3) {
         return res.status(400).json({ 
           error: '🔒 Cambio de valor muy drástico',
           detalles: {
             valorActual: componenteActual.valor_componente,
             valorPropuesto: valor,
             cambio: parseFloat(cambioValor.toFixed(2)),
-            limitePermitido: 15,
+            limitePermitido: 3,
             actividadesAfectadas: totalActividades,
             razon: 'Este componente tiene actividades asignadas. Los cambios grandes pueden afectar las calificaciones.'
           },
-          sugerencia: `Considera hacer un cambio menor (máximo ±15%) o crear un nuevo componente`
+          sugerencia: `Considera hacer un cambio menor (máximo ±3 puntos) o crear un nuevo componente`
         });
       }
 
-      // Advertencia sobre actividades afectadas
       console.log(`⚠️ Modificando componente con ${totalActividades} actividades: ${titulosActividades}`);
     }
 
@@ -582,17 +583,17 @@ const modificarComponente = async (req, res) => {
     const sumaOtros = sumaOtrosResult.recordset[0].sumaOtros;
     const nuevaSuma = parseFloat((sumaOtros + valor).toFixed(2));
 
-    // 5. 🚨 VALIDAR QUE NO EXCEDA 100%
-    if (nuevaSuma > 100) {
+    // 5. 🚨 VALIDAR QUE NO EXCEDA 10 PUNTOS
+    if (nuevaSuma > 10) {
       return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 100%`,
+        error: `❌ La suma no puede exceder 10 puntos`,
         detalles: {
           otrosComponentes: parseFloat(sumaOtros.toFixed(2)),
           valorPropuesto: valor,
           sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 100).toFixed(2)),
-          disponible: parseFloat((100 - sumaOtros).toFixed(2)),
-          valorMaximo: parseFloat((100 - sumaOtros).toFixed(2))
+          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
+          disponible: parseFloat((10 - sumaOtros).toFixed(2)),
+          valorMaximo: parseFloat((10 - sumaOtros).toFixed(2))
         }
       });
     }
@@ -622,7 +623,7 @@ const modificarComponente = async (req, res) => {
       .input('valorComponente', sql.Decimal(4,2), valor)
       .execute(`sp_ActualizarComponente`);
 
-    console.log(`✅ Componente modificado: ${nombreComponente} - ${valor}%`);
+    console.log(`✅ Componente modificado: ${nombreComponente} - ${valor} pts`);
     
     // 8. 🎯 RESPUESTA DETALLADA
     const respuesta = {
@@ -644,7 +645,7 @@ const modificarComponente = async (req, res) => {
       estadisticas: {
         sumaOtros: parseFloat(sumaOtros.toFixed(2)),
         sumaNueva: nuevaSuma,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2))
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)) // 🆕 CAMBIO
       }
     };
 
@@ -702,7 +703,7 @@ const eliminarComponente = async (req, res) => {
         soluciones: [
           'Elimina primero todas las actividades que usan este componente',
           'Modifica las actividades para usar otro componente',
-          'Cambia el valor del componente a 0% en lugar de eliminarlo'
+          'Cambia el valor del componente a 0 puntos en lugar de eliminarlo'
         ],
         codigoDeSeguridad: 'COMPONENT_IN_USE'
       });
@@ -732,9 +733,9 @@ const eliminarComponente = async (req, res) => {
       });
     }
 
-    // 5. 🔥 ADVERTENCIA SOBRE PÉRDIDA DE PORCENTAJE
-    if (sumaActual === 100 && componente.valor_componente > 0) {
-      console.log(`⚠️ ADVERTENCIA: Se perderá ${componente.valor_componente}% de la ponderación total`);
+    // 5. 🔥 ADVERTENCIA SOBRE PÉRDIDA DE PUNTOS
+    if (sumaActual === 10 && componente.valor_componente > 0) {
+      console.log(`⚠️ ADVERTENCIA: Se perderán ${componente.valor_componente} puntos de la ponderación total`);
     }
 
     // 6. 🗑️ PROCEDER CON LA ELIMINACIÓN
@@ -742,8 +743,8 @@ const eliminarComponente = async (req, res) => {
       .input('idComponente', sql.Int, parseInt(idComponente))
       .execute(`sp_EliminarComponenteEvaluacion`);
 
-    console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente}%`);
-    console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
+    console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente} pts`);
+    console.log(`📊 Nueva suma total: ${nuevaSuma} pts`);
 
     // 7. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
     const respuesta = {
@@ -756,17 +757,17 @@ const eliminarComponente = async (req, res) => {
         sumaAnterior: parseFloat(sumaActual.toFixed(2)),
         sumaNueva: parseFloat(nuevaSuma.toFixed(2)),
         valorLiberado: componente.valor_componente,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2)),
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
         componentesRestantes: totalComponentes - 1
       }
     };
 
     // 🔮 RECOMENDACIONES INTELIGENTES POST-ELIMINACIÓN
-    if (nuevaSuma < 100) {
-      const faltante = 100 - nuevaSuma;
+    if (nuevaSuma < 10) {
+      const faltante = 10 - nuevaSuma;
       respuesta.recomendacion = {
         tipo: 'rebalancear',
-        mensaje: `Considera redistribuir el ${faltante.toFixed(2)}% liberado`,
+        mensaje: `Considera redistribuir los ${faltante.toFixed(2)} puntos liberados`,
         opciones: [
           'Incrementar el valor de un componente existente',
           'Crear un nuevo componente con el valor liberado',
@@ -775,7 +776,7 @@ const eliminarComponente = async (req, res) => {
       };
     }
 
-    if (nuevaSuma < 50) {
+    if (nuevaSuma < 5) {
       respuesta.alerta = {
         tipo: 'suma_muy_baja',
         mensaje: '⚠️ La suma total está muy baja. Considera agregar más componentes.',
