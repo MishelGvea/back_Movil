@@ -22,7 +22,7 @@ const {
   validarSumaComponentes,
   obtenerComponentesParaDropdown,
   validarComplecionParcial,
-  validarParcial, // 🆕 AGREGAR ESTA IMPORTACIÓN
+  validarParcial,
   obtenerEstadisticasGeneralesDocente,
   clonarComponentesParcial,
 
@@ -99,6 +99,7 @@ router.delete('/componentes/:idComponente', eliminarComponente);
 router.get('/componentes/validar/:claveDocente/:claveMateria/:parcial/:periodo', validarSumaComponentes);
 
 // 🆕 AGREGAR ESTA RUTA FALTANTE (para recomendaciones)
+// ✅ Esta es la ruta que debes usar desde el frontend
 router.get('/componentes/validar-parcial/:claveDocente/:claveMateria/:parcial/:periodo', validarParcial);
 
 // 🆕 Validar completitud de un parcial específico (función nueva mejorada)

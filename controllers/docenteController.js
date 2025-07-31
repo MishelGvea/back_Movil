@@ -2922,7 +2922,7 @@ module.exports = {
   obtenerCalificacionesEquipo,
   guardarCalificacionesAlumno, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
   guardarCalificacionesEquipo, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
-
+  validarParcial, 
   // Funciones de observaciones
   guardarObservacionAlumno,
   guardarObservacionEquipo,
