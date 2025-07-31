@@ -59,7 +59,8 @@ const {
 
   // Procedimientos almacenados
   obtenerConcentradoFinal,
-  obtenerCalificacionesActividad
+  obtenerCalificacionesActividad,
+  obtenerEstadisticasCentroControl
 } = require('../controllers/docenteController');
 
 // =========================================
@@ -160,5 +161,7 @@ router.get('/actividad-equipo/:idActividadEquipo/observacion', obtenerObservacio
 // =========================================
 router.get('/concentrado/:parcial/:grupo/:periodo/:cuatrimestre/:materia', obtenerConcentradoFinal);
 router.get('/calificaciones-actividad/:parcial/:grupo/:periodo/:cuatrimestre/:materia', obtenerCalificacionesActividad);
+
+router.get('/:claveDocente/materia/:claveMateria/estadisticas-centro-control', obtenerEstadisticasCentroControl);
 
 module.exports = router;

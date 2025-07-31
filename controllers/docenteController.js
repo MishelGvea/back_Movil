@@ -3936,6 +3936,177 @@ const obtenerComparativaEquipoIndividual = async (req, res) => {
   }
 };
 
+const obtenerEstadisticasCentroControl = async (req, res) => {
+  const { claveDocente, claveMateria } = req.params;
+
+  try {
+    const pool = await sql.connect(config);
+    
+    console.log(`📊 Obteniendo estadísticas REALES: Docente=${claveDocente}, Materia=${claveMateria}`);
+
+    const result = await pool.request()
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .query(`
+        WITH EstadisticasActividades AS (
+          SELECT 
+            a.id_actividad,
+            ag.id_grupo,
+            ag.fecha_entrega,
+            i.parcial,
+            
+            -- 🎯 CALCULAR SI LA ACTIVIDAD ESTÁ POR CALIFICAR
+            CASE 
+              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+                -- Individual: buscar alumnos entregados sin calificar
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_alumno aa 
+                 WHERE aa.id_actividad = a.id_actividad 
+                   AND aa.id_estado = 2 -- Entregado
+                   AND NOT EXISTS (
+                     SELECT 1 FROM tbl_evaluacion_criterioActividad eca 
+                     WHERE eca.id_actividad_alumno = aa.id_actividad_alumno
+                   )
+                )
+              ELSE 
+                -- Equipo: buscar equipos entregados sin calificar
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_equipo ae 
+                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                 INNER JOIN tbl_docente_materia_grupo dmg ON e.id_grupo = dmg.id_grupo
+                 INNER JOIN tbl_docente_materia dm ON dmg.id_DocenteMateria = dm.idDocenteMateria
+                 WHERE ae.id_actividad = a.id_actividad 
+                   AND ae.id_estado = 2 -- Entregado
+                   AND dm.vchClvTrabajador = @claveDocente
+                   AND dm.vchClvMateria = @claveMateria
+                   AND NOT EXISTS (
+                     SELECT 1 FROM tbl_evaluacion_criterioActividadEquipo ecae 
+                     WHERE ecae.id_actividad_equipo = ae.id_actividad_equipo
+                   )
+                )
+            END AS entregas_por_calificar,
+            
+            -- 🚨 CALCULAR SI LA ACTIVIDAD ES URGENTE
+            CASE 
+              WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) BETWEEN -24 AND 48 THEN 1
+              ELSE 0
+            END AS es_urgente,
+            
+            -- 📊 CALCULAR PENDIENTES
+            CASE 
+              WHEN ISNULL(a.id_modalidad, 1) = 1 THEN 
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_alumno aa 
+                 INNER JOIN tblAlumnos al ON aa.vchMatricula = al.vchMatricula
+                 WHERE aa.id_actividad = a.id_actividad 
+                   AND aa.id_estado = 1 -- Pendiente
+                   AND al.chvGrupo = ag.id_grupo
+                )
+              ELSE 
+                (SELECT COUNT(*) 
+                 FROM tbl_actividad_equipo ae 
+                 INNER JOIN tbl_equipos e ON ae.id_equipo = e.id_equipo
+                 WHERE ae.id_actividad = a.id_actividad 
+                   AND ae.id_estado = 1 -- Pendiente
+                   AND e.id_grupo = ag.id_grupo
+                )
+            END AS pendientes_grupo
+
+          FROM tbl_actividades a
+          INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+          INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad
+          WHERE i.vchClvTrabajador = @claveDocente
+            AND i.vchClvMateria = @claveMateria
+        ),
+        
+        ResumenGrupos AS (
+          SELECT 
+            COUNT(DISTINCT dmg.id_grupo) as total_grupos,
+            COUNT(DISTINCT a.vchMatricula) as total_alumnos
+          FROM tbl_docente_materia dm
+          LEFT JOIN tbl_docente_materia_grupo dmg ON dm.idDocenteMateria = dmg.id_DocenteMateria
+          LEFT JOIN tbl_grupos g ON dmg.id_grupo = g.id_grupo
+          LEFT JOIN tblAlumnos a ON a.chvGrupo = g.id_grupo
+            AND a.vchClvCuatri = dm.vchCuatrimestre
+            AND a.vchPeriodo = dm.Periodo
+          WHERE dm.vchClvTrabajador = @claveDocente
+            AND dm.vchClvMateria = @claveMateria
+        )
+        
+        SELECT 
+          -- 📊 ESTADÍSTICAS PRINCIPALES REALES
+          rg.total_grupos,
+          rg.total_alumnos,
+          
+          -- 📝 POR CALIFICAR: Total real de entregas que necesitan calificación
+          ISNULL(SUM(ea.entregas_por_calificar), 0) as total_por_calificar,
+          
+          -- 🚨 URGENTES: Actividades reales con fechas próximas o vencidas recientemente
+          COUNT(CASE WHEN ea.es_urgente = 1 AND ea.pendientes_grupo > 0 THEN 1 END) as actividades_urgentes,
+          
+          -- 📋 ACTIVIDADES TOTALES REALES
+          COUNT(DISTINCT ea.id_actividad) as total_actividades,
+          
+          -- ⏰ PRÓXIMAS A VENCER (siguiente 48 horas)
+          COUNT(CASE 
+            WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) BETWEEN 0 AND 48 
+            AND ea.pendientes_grupo > 0 
+            THEN 1 
+          END) as proximas_a_vencer,
+          
+          -- 🔥 ACTIVIDADES CRÍTICAS (vencidas con pendientes)
+          COUNT(CASE 
+            WHEN DATEDIFF(hour, GETDATE(), ag.fecha_entrega) < 0 
+            AND ea.pendientes_grupo > 0 
+            THEN 1 
+          END) as actividades_criticas
+          
+        FROM EstadisticasActividades ea
+        INNER JOIN tbl_actividades a ON ea.id_actividad = a.id_actividad
+        INNER JOIN tbl_instrumento i ON a.id_instrumento = i.id_instrumento
+        INNER JOIN tbl_actividad_grupo ag ON a.id_actividad = ag.id_actividad AND ag.id_grupo = ea.id_grupo
+        CROSS JOIN ResumenGrupos rg
+        GROUP BY rg.total_grupos, rg.total_alumnos
+      `);
+
+    const estadisticas = result.recordset[0] || {
+      total_grupos: 0,
+      total_alumnos: 0,
+      total_por_calificar: 0,
+      actividades_urgentes: 0,
+      total_actividades: 0,
+      proximas_a_vencer: 0,
+      actividades_criticas: 0
+    };
+
+    console.log(`✅ Estadísticas REALES calculadas:`);
+    console.log(`   📊 Grupos: ${estadisticas.total_grupos}`);
+    console.log(`   📝 Por calificar: ${estadisticas.total_por_calificar}`);
+    console.log(`   🚨 Urgentes: ${estadisticas.actividades_urgentes}`);
+    console.log(`   🔥 Críticas: ${estadisticas.actividades_criticas}`);
+
+    res.json({
+      estadisticas,
+      timestamp: new Date().toISOString(),
+      resumen: {
+        grupos: estadisticas.total_grupos,
+        porCalificar: estadisticas.total_por_calificar,
+        urgentes: estadisticas.actividades_urgentes,
+        criticas: estadisticas.actividades_criticas,
+        proximasVencer: estadisticas.proximas_a_vencer
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error al obtener estadísticas REALES del centro de control:', error);
+    res.status(500).json({ 
+      error: 'Error del servidor',
+      mensaje: 'No se pudieron obtener las estadísticas reales',
+      detalle: error.message 
+    });
+  }
+};
+
 // ===============================================
 // EXPORTS COMPLETOS ACTUALIZADOS Y CORREGIDOS
 // ===============================================
@@ -3999,5 +4170,6 @@ module.exports = {
 
   // Funciones de procedimientos almacenados
   obtenerConcentradoFinal,
-  obtenerCalificacionesActividad
+  obtenerCalificacionesActividad,
+  obtenerEstadisticasCentroControl
 };
