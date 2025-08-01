@@ -22,6 +22,7 @@ const {
   validarSumaComponentes,
   obtenerComponentesParaDropdown,
   validarComplecionParcial,
+  validarParcial,
   obtenerEstadisticasGeneralesDocente,
   clonarComponentesParcial,
 
@@ -29,7 +30,7 @@ const {
   obtenerGruposPorMateriaDocente,
   obtenerListasCotejo,
   obtenerActividadesPorGrupo,
-  obtenerEstadisticasGrupo, // ✅ AGREGAR ESTA LÍNEA
+  obtenerEstadisticasGrupo,
   crearActividad,
   crearActividadCompletaConComponente,
 
@@ -97,8 +98,12 @@ router.delete('/componentes/:idComponente', eliminarComponente);
 // Validar suma total de componentes (función anterior)
 router.get('/componentes/validar/:claveDocente/:claveMateria/:parcial/:periodo', validarSumaComponentes);
 
+// 🆕 AGREGAR ESTA RUTA FALTANTE (para recomendaciones)
+// ✅ Esta es la ruta que debes usar desde el frontend
+router.get('/componentes/validar-parcial/:claveDocente/:claveMateria/:parcial/:periodo', validarParcial);
+
 // 🆕 Validar completitud de un parcial específico (función nueva mejorada)
-router.get('/componentes/validar-parcial/:claveDocente/:claveMateria/:parcial/:periodo', validarComplecionParcial);
+router.get('/componentes/validar-completo/:claveDocente/:claveMateria/:parcial/:periodo', validarComplecionParcial);
 
 // 🆕 Obtener estadísticas generales del docente
 router.get('/componentes/estadisticas-generales/:claveDocente', obtenerEstadisticasGeneralesDocente);

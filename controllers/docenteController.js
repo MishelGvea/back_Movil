@@ -1,5 +1,7 @@
 const { sql, config } = require('../db/sqlConfig');
 
+
+
 // ===============================================
 // FUNCIONES EXISTENTES (SIN MODIFICAR)
 // ===============================================
@@ -101,6 +103,71 @@ const obtenerMateriasCompletas = async (req, res) => {
 };
 
 // 🆕 FUNCIÓN AUXILIAR: Obtener información del periodo actual
+const obtenerPeriodoActualInterno = async () => {
+  try {
+    const pool = await sql.connect(config);
+    
+    // Obtener el periodo más reciente usando tu SP existente
+    const periodoResult = await pool.request().query(`EXEC sp_ObtenerPeriodoActual;`);
+    
+    if (periodoResult.recordset.length === 0) {
+      console.error('❌ No se encontraron periodos en la BD');
+      return null;
+    }
+
+    const periodoActual = periodoResult.recordset[0].Periodo.toString();
+    console.log(`📅 Periodo obtenido de BD: ${periodoActual}`);
+    
+    return periodoActual;
+
+  } catch (err) {
+    console.error('❌ Error al obtener periodo actual interno:', err);
+    return null;
+  }
+};
+
+/**
+ * Validar y obtener periodo correcto (con fallback)
+ * @param {string} periodoRecibido - Periodo recibido del frontend
+ * @returns {Promise<string>} Periodo validado
+ */
+const validarPeriodo = async (periodoRecibido) => {
+  // Si se envía 'auto' o no se envía periodo, obtener de BD
+  if (!periodoRecibido || 
+      periodoRecibido === 'auto' || 
+      periodoRecibido === 'null' || 
+      periodoRecibido === 'undefined') {
+    
+    const periodoBD = await obtenerPeriodoActualInterno();
+    if (periodoBD) {
+      console.log(`✅ Usando periodo automático de BD: ${periodoBD}`);
+      return periodoBD;
+    }
+  }
+
+  // Si se envía un periodo específico, validarlo
+  if (periodoRecibido && periodoRecibido.length === 5) {
+    const año = parseInt(periodoRecibido.substring(0, 4));
+    const cuatrimestre = parseInt(periodoRecibido.substring(4));
+    const añoActual = new Date().getFullYear();
+    
+    // Validar rango razonable
+    if (año >= 2020 && año <= añoActual + 2 && [1, 2, 3].includes(cuatrimestre)) {
+      console.log(`✅ Usando periodo específico validado: ${periodoRecibido}`);
+      return periodoRecibido;
+    }
+  }
+
+  // Fallback: obtener de BD
+  console.log(`⚠️ Periodo inválido: ${periodoRecibido}, obteniendo de BD...`);
+  const periodoBD = await obtenerPeriodoActualInterno();
+  return periodoBD || '20252'; // Último fallback
+};
+
+/**
+ * Endpoint para obtener información completa del periodo actual
+ * Tu función original mejorada
+ */
 const obtenerPeriodoActual = async (req, res) => {
   try {
     const pool = await sql.connect(config);
@@ -112,30 +179,32 @@ const obtenerPeriodoActual = async (req, res) => {
       return res.status(404).json({ mensaje: 'No se encontraron periodos' });
     }
 
-    const periodoActual = periodoResult.recordset[0].Periodo;
+    const periodoActual = periodoResult.recordset[0].Periodo.toString();
     
     // Extraer año y cuatrimestre del periodo
-    const año = periodoActual.toString().substring(0, 4);
-    const cuatrimestreNumero = periodoActual.toString().substring(4, 5);
+    const año = periodoActual.substring(0, 4);
+    const cuatrimestreNumero = periodoActual.substring(4, 5);
     
     // Obtener información del cuatrimestre desde tbl_periodos
     const cuatrimestreInfo = await pool.request()
       .input('idPeriodo', sql.Int, parseInt(cuatrimestreNumero))
-      .query(`
-        EXEC sp_CuatrimestreInfo
-      `);
+      .query(`EXEC sp_CuatrimestreInfo`);
 
     const infoCompleta = {
       periodoActual,
       año,
       cuatrimestreNumero,
       descripcion: `Año ${año}, Cuatrimestre ${cuatrimestreNumero}`,
+      // 🆕 Información adicional útil
+      esPeriodoAutomatico: true,
+      fechaConsulta: new Date().toISOString(),
       ...(cuatrimestreInfo.recordset.length > 0 && {
         mesInicia: cuatrimestreInfo.recordset[0].mesInicia,
         mesTermina: cuatrimestreInfo.recordset[0].mesTermina
       })
     };
 
+    console.log(`📅 Periodo actual consultado vía endpoint: ${periodoActual}`);
     res.json(infoCompleta);
 
   } catch (err) {
@@ -167,11 +236,21 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
 // 🆕 FUNCIONES CRUD PARA GESTIÓN DE COMPONENTES
 // ===============================================
 
+
 // Obtener todos los componentes de un docente/materia/parcial/periodo
 const obtenerComponentesPorMateria = async (req, res) => {
-  const { claveMateria, parcial, periodo, claveDocente } = req.params;
+  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
 
   try {
+    // USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
     const pool = await sql.connect(config);
     
     console.log(`🔍 Buscando componentes: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}, Docente=${claveDocente}`);
@@ -183,27 +262,31 @@ const obtenerComponentesPorMateria = async (req, res) => {
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_ObtenerComponentesMateria`);
 
-    // Calcular suma total de valores
+    // 🆕 CAMBIO: Calcular suma total de puntos (máximo 10)
     const sumaTotal = result.recordset.reduce((suma, comp) => suma + (comp.valor_componente || 0), 0);
 
-    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal}%`);
+    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal} pts (Periodo BD: ${periodo})`);
     
     res.json({
       componentes: result.recordset,
       sumaTotal: parseFloat(sumaTotal.toFixed(2)),
-      disponible: parseFloat((100 - sumaTotal).toFixed(2)),
+      disponible: parseFloat((10 - sumaTotal).toFixed(2)), // 🆕 CAMBIO: máximo 10 en lugar de 100
       validacion: {
-        esValido: sumaTotal <= 100,
-        esCompleto: sumaTotal === 100,
-        exceso: sumaTotal > 100 ? parseFloat((sumaTotal - 100).toFixed(2)) : 0,
-        faltante: sumaTotal < 100 ? parseFloat((100 - sumaTotal).toFixed(2)) : 0
+        esValido: sumaTotal <= 10, // 🆕 CAMBIO: validar contra 10
+        esCompleto: sumaTotal === 10, // 🆕 CAMBIO: completo cuando suma 10
+        exceso: sumaTotal > 10 ? parseFloat((sumaTotal - 10).toFixed(2)) : 0, // 🆕 CAMBIO
+        faltante: sumaTotal < 10 ? parseFloat((10 - sumaTotal).toFixed(2)) : 0 // 🆕 CAMBIO
       },
-      // 🆕 ESTADÍSTICAS ADICIONALES
       estadisticas: {
         totalComponentes: result.recordset.length,
         mayorComponente: result.recordset.length > 0 ? Math.max(...result.recordset.map(c => c.valor_componente)) : 0,
         menorComponente: result.recordset.length > 0 ? Math.min(...result.recordset.map(c => c.valor_componente)) : 0,
         promedioComponente: result.recordset.length > 0 ? parseFloat((sumaTotal / result.recordset.length).toFixed(2)) : 0
+      },
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
       }
     });
 
@@ -212,23 +295,31 @@ const obtenerComponentesPorMateria = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-
 const crearComponente = async (req, res) => {
   const { 
     claveMateria, 
     parcial, 
-    periodo, 
+    periodo: periodoRecibido, 
     claveDocente,
     nombreComponente,
     valorComponente 
   } = req.body;
 
   try {
+    // USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
     const pool = await sql.connect(config);
     
-    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente}%`);
+    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente} pts (Periodo BD: ${periodo})`);
 
-    // 1. 🛡️ VALIDACIONES BÁSICAS
+    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
     if (!nombreComponente || !nombreComponente.trim()) {
       return res.status(400).json({ 
         error: 'El nombre del componente es obligatorio' 
@@ -242,9 +333,10 @@ const crearComponente = async (req, res) => {
     }
 
     const valor = parseFloat(valorComponente);
-    if (valor <= 0 || valor > 100) {
+    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
+    if (valor <= 0 || valor > 10) {
       return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 100' 
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
       });
     }
 
@@ -260,36 +352,34 @@ const crearComponente = async (req, res) => {
     const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
     const nuevaSuma = parseFloat((sumaActual + valor).toFixed(2));
 
-    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO
-    
-    // 3.1 No exceder 100%
-    if (nuevaSuma > 100) {
+    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO ACTUALIZADAS
+    // 🆕 CAMBIO: validar contra suma máxima de 10
+    if (nuevaSuma > 10) {
       return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 100%`,
+        error: `❌ La suma no puede exceder 10 puntos`,
         detalles: {
           sumaActual: parseFloat(sumaActual.toFixed(2)),
           valorIntentando: valor,
           sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 100).toFixed(2)),
-          disponible: parseFloat((100 - sumaActual).toFixed(2)),
-          sugerencia: `El valor máximo permitido es ${(100 - sumaActual).toFixed(2)}%`
+          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
+          disponible: parseFloat((10 - sumaActual).toFixed(2)),
+          sugerencia: `El valor máximo permitido es ${(10 - sumaActual).toFixed(2)} puntos`
         }
       });
     }
 
-    // 3.2 Validar que no sea un valor muy pequeño si ya hay componentes
-    if (totalComponentes > 0 && valor < 5) {
+    // 🆕 CAMBIO: ajustar validación de valor mínimo para sistema de puntos
+    if (totalComponentes > 0 && valor < 0.5) {
       return res.status(400).json({ 
         error: '⚠️ Valor muy pequeño',
         detalles: {
-          valorMinimo: 5,
+          valorMinimo: 0.5,
           valorIntentando: valor,
-          razon: 'Para mantener un balance adecuado, cada componente debe valer al menos 5%'
+          razon: 'Para mantener un balance adecuado, cada componente debe valer al menos 0.5 puntos'
         }
       });
     }
 
-    // 3.3 Validar límite de componentes por parcial
     if (totalComponentes >= 8) {
       return res.status(400).json({ 
         error: '📊 Límite de componentes alcanzado',
@@ -301,7 +391,7 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 4. 🔒 VERIFICAR NOMBRE ÚNICO - CONSULTA CORREGIDA
+    // 4. 🔒 VERIFICAR NOMBRE ÚNICO
     const existeResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
@@ -331,10 +421,9 @@ const crearComponente = async (req, res) => {
       .input('valorComponente', sql.Decimal(4,2), valor)
       .execute(`sp_InsertarComponenteEvaluacion`);
 
-    console.log(`✅ Componente creado: ${nombreComponente} - ${valor}%`);
-    console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
+    console.log(`✅ Componente creado: ${nombreComponente} - ${valor} pts (Periodo BD: ${periodo})`);
 
-    // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
+    // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES ACTUALIZADAS
     const respuesta = {
       mensaje: '✅ Componente creado correctamente',
       componente: {
@@ -344,27 +433,32 @@ const crearComponente = async (req, res) => {
       estadisticas: {
         sumaAnterior: parseFloat(sumaActual.toFixed(2)),
         sumaNueva: nuevaSuma,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2)),
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
         componentesTotales: totalComponentes + 1,
-        progreso: parseFloat(((nuevaSuma / 100) * 100).toFixed(1))
+        progreso: parseFloat(((nuevaSuma / 10) * 100).toFixed(1)) // 🆕 CAMBIO: progreso sobre 10
+      },
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
       }
     };
 
-    // 🔮 RECOMENDACIONES INTELIGENTES
-    if (nuevaSuma < 100) {
-      const faltante = 100 - nuevaSuma;
+    // 🔮 RECOMENDACIONES INTELIGENTES ACTUALIZADAS
+    if (nuevaSuma < 10) {
+      const faltante = 10 - nuevaSuma;
       respuesta.recomendacion = {
         tipo: 'completar',
-        mensaje: `Te faltan ${faltante.toFixed(2)}% para completar el 100%`,
+        mensaje: `Te faltan ${faltante.toFixed(2)} puntos para completar los 10 puntos`,
         sugerencias: [
-          faltante > 20 ? 'Considera agregar un componente de "Examen" o "Proyecto"' : null,
-          faltante <= 20 && faltante > 10 ? 'Puedes agregar "Participación" o "Tareas"' : null,
-          faltante <= 10 ? 'Un componente pequeño como "Asistencia" completaría el 100%' : null
+          faltante > 4 ? 'Considera agregar un componente de "Examen" o "Proyecto"' : null,
+          faltante <= 4 && faltante > 2 ? 'Puedes agregar "Participación" o "Tareas"' : null,
+          faltante <= 2 ? 'Un componente pequeño como "Asistencia" completaría los 10 puntos' : null
         ].filter(Boolean)
       };
-    } else if (nuevaSuma === 100) {
+    } else if (nuevaSuma === 10) {
       respuesta.felicitacion = {
-        mensaje: '🎉 ¡Perfecto! Has completado el 100% de la ponderación',
+        mensaje: '🎉 ¡Perfecto! Has completado los 10 puntos de la ponderación',
         estado: 'completo'
       };
     }
@@ -376,7 +470,41 @@ const crearComponente = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
+// 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
+const validarParcial = async (req, res) => {
+  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
 
+  try {
+    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+    
+    const pool = await sql.connect(config);
+    
+    // Aquí puedes implementar lógica de recomendaciones específicas
+    const recomendaciones = [];
+    
+    console.log(`🔍 Validando parcial: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}`);
+    
+    res.json({
+      recomendaciones,
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error al validar parcial:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+};
 // Modificar un componente existente
 const modificarComponente = async (req, res) => {
   const { idComponente } = req.params;
@@ -387,7 +515,7 @@ const modificarComponente = async (req, res) => {
     
     console.log(`🔄 Modificando componente ID: ${idComponente}`);
 
-    // 1. 🛡️ VALIDACIONES BÁSICAS
+    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
     if (!nombreComponente || !nombreComponente.trim()) {
       return res.status(400).json({ 
         error: 'El nombre del componente es obligatorio' 
@@ -395,9 +523,10 @@ const modificarComponente = async (req, res) => {
     }
 
     const valor = parseFloat(valorComponente);
-    if (isNaN(valor) || valor <= 0 || valor > 100) {
+    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
+    if (isNaN(valor) || valor <= 0 || valor > 10) {
       return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 100' 
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
       });
     }
 
@@ -420,25 +549,25 @@ const modificarComponente = async (req, res) => {
     const { totalActividades, titulosActividades } = actividadesResult.recordset[0];
 
     // 3.1 Si hay actividades, restringir cambios drásticos
+    // 🆕 CAMBIO: ajustar límite de cambio para sistema de puntos (3 puntos máximo)
     if (totalActividades > 0) {
       const cambioValor = Math.abs(valor - componenteActual.valor_componente);
       
-      if (cambioValor > 15) {
+      if (cambioValor > 3) {
         return res.status(400).json({ 
           error: '🔒 Cambio de valor muy drástico',
           detalles: {
             valorActual: componenteActual.valor_componente,
             valorPropuesto: valor,
             cambio: parseFloat(cambioValor.toFixed(2)),
-            limitePermitido: 15,
+            limitePermitido: 3,
             actividadesAfectadas: totalActividades,
             razon: 'Este componente tiene actividades asignadas. Los cambios grandes pueden afectar las calificaciones.'
           },
-          sugerencia: `Considera hacer un cambio menor (máximo ±15%) o crear un nuevo componente`
+          sugerencia: `Considera hacer un cambio menor (máximo ±3 puntos) o crear un nuevo componente`
         });
       }
 
-      // Advertencia sobre actividades afectadas
       console.log(`⚠️ Modificando componente con ${totalActividades} actividades: ${titulosActividades}`);
     }
 
@@ -454,17 +583,17 @@ const modificarComponente = async (req, res) => {
     const sumaOtros = sumaOtrosResult.recordset[0].sumaOtros;
     const nuevaSuma = parseFloat((sumaOtros + valor).toFixed(2));
 
-    // 5. 🚨 VALIDAR QUE NO EXCEDA 100%
-    if (nuevaSuma > 100) {
+    // 5. 🚨 VALIDAR QUE NO EXCEDA 10 PUNTOS
+    if (nuevaSuma > 10) {
       return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 100%`,
+        error: `❌ La suma no puede exceder 10 puntos`,
         detalles: {
           otrosComponentes: parseFloat(sumaOtros.toFixed(2)),
           valorPropuesto: valor,
           sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 100).toFixed(2)),
-          disponible: parseFloat((100 - sumaOtros).toFixed(2)),
-          valorMaximo: parseFloat((100 - sumaOtros).toFixed(2))
+          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
+          disponible: parseFloat((10 - sumaOtros).toFixed(2)),
+          valorMaximo: parseFloat((10 - sumaOtros).toFixed(2))
         }
       });
     }
@@ -494,7 +623,7 @@ const modificarComponente = async (req, res) => {
       .input('valorComponente', sql.Decimal(4,2), valor)
       .execute(`sp_ActualizarComponente`);
 
-    console.log(`✅ Componente modificado: ${nombreComponente} - ${valor}%`);
+    console.log(`✅ Componente modificado: ${nombreComponente} - ${valor} pts`);
     
     // 8. 🎯 RESPUESTA DETALLADA
     const respuesta = {
@@ -516,7 +645,7 @@ const modificarComponente = async (req, res) => {
       estadisticas: {
         sumaOtros: parseFloat(sumaOtros.toFixed(2)),
         sumaNueva: nuevaSuma,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2))
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)) // 🆕 CAMBIO
       }
     };
 
@@ -574,7 +703,7 @@ const eliminarComponente = async (req, res) => {
         soluciones: [
           'Elimina primero todas las actividades que usan este componente',
           'Modifica las actividades para usar otro componente',
-          'Cambia el valor del componente a 0% en lugar de eliminarlo'
+          'Cambia el valor del componente a 0 puntos en lugar de eliminarlo'
         ],
         codigoDeSeguridad: 'COMPONENT_IN_USE'
       });
@@ -604,9 +733,9 @@ const eliminarComponente = async (req, res) => {
       });
     }
 
-    // 5. 🔥 ADVERTENCIA SOBRE PÉRDIDA DE PORCENTAJE
-    if (sumaActual === 100 && componente.valor_componente > 0) {
-      console.log(`⚠️ ADVERTENCIA: Se perderá ${componente.valor_componente}% de la ponderación total`);
+    // 5. 🔥 ADVERTENCIA SOBRE PÉRDIDA DE PUNTOS
+    if (sumaActual === 10 && componente.valor_componente > 0) {
+      console.log(`⚠️ ADVERTENCIA: Se perderán ${componente.valor_componente} puntos de la ponderación total`);
     }
 
     // 6. 🗑️ PROCEDER CON LA ELIMINACIÓN
@@ -614,8 +743,8 @@ const eliminarComponente = async (req, res) => {
       .input('idComponente', sql.Int, parseInt(idComponente))
       .execute(`sp_EliminarComponenteEvaluacion`);
 
-    console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente}%`);
-    console.log(`📊 Nueva suma total: ${nuevaSuma}%`);
+    console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente} pts`);
+    console.log(`📊 Nueva suma total: ${nuevaSuma} pts`);
 
     // 7. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
     const respuesta = {
@@ -628,17 +757,17 @@ const eliminarComponente = async (req, res) => {
         sumaAnterior: parseFloat(sumaActual.toFixed(2)),
         sumaNueva: parseFloat(nuevaSuma.toFixed(2)),
         valorLiberado: componente.valor_componente,
-        disponible: parseFloat((100 - nuevaSuma).toFixed(2)),
+        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
         componentesRestantes: totalComponentes - 1
       }
     };
 
     // 🔮 RECOMENDACIONES INTELIGENTES POST-ELIMINACIÓN
-    if (nuevaSuma < 100) {
-      const faltante = 100 - nuevaSuma;
+    if (nuevaSuma < 10) {
+      const faltante = 10 - nuevaSuma;
       respuesta.recomendacion = {
         tipo: 'rebalancear',
-        mensaje: `Considera redistribuir el ${faltante.toFixed(2)}% liberado`,
+        mensaje: `Considera redistribuir los ${faltante.toFixed(2)} puntos liberados`,
         opciones: [
           'Incrementar el valor de un componente existente',
           'Crear un nuevo componente con el valor liberado',
@@ -647,7 +776,7 @@ const eliminarComponente = async (req, res) => {
       };
     }
 
-    if (nuevaSuma < 50) {
+    if (nuevaSuma < 5) {
       respuesta.alerta = {
         tipo: 'suma_muy_baja',
         mensaje: '⚠️ La suma total está muy baja. Considera agregar más componentes.',
@@ -899,16 +1028,28 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
 };
 
 // 🆕 FUNCIÓN: Clonar componentes de un parcial a otro
+// 🔧 REEMPLAZAR tu función clonarComponentesParcial con esta versión:
 const clonarComponentesParcial = async (req, res) => {
   const { 
     claveMateria, 
     parcialOrigen, 
     parcialDestino, 
-    periodo, 
+    periodo: periodoRecibido, // 🆕 CAMBIAR NOMBRE
     claveDocente 
   } = req.body;
 
   try {
+    // 🆕 USAR PERIODO AUTOMÁTICO DE BD
+    const periodo = await validarPeriodo(periodoRecibido);
+    
+    if (!periodo) {
+      return res.status(500).json({ 
+        error: 'No se pudo determinar el periodo actual' 
+      });
+    }
+
+    console.log(`📋 Clonando componentes: ${parcialOrigen} → ${parcialDestino} (Periodo BD: ${periodo})`);
+
     const pool = await sql.connect(config);
 
     // 🚀 EJECUTAR EL STORED PROCEDURE (hace todo: verifica, valida y clona)
@@ -916,7 +1057,7 @@ const clonarComponentesParcial = async (req, res) => {
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialOrigen', sql.Int, parcialOrigen)
       .input('parcialDestino', sql.Int, parcialDestino)
-      .input('periodo', sql.VarChar, periodo)
+      .input('periodo', sql.VarChar, periodo) // 🆕 USAR PERIODO VALIDADO
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_componentesClonados');
 
@@ -926,7 +1067,13 @@ const clonarComponentesParcial = async (req, res) => {
     if (respuesta.resultado === 'ERROR') {
       return res.status(400).json({ 
         error: respuesta.mensaje,
-        componentesClonados: respuesta.componentesClonados || 0
+        componentesClonados: respuesta.componentesClonados || 0,
+        // 🆕 INFORMACIÓN DEL PERIODO
+        periodoInfo: {
+          periodoUsado: periodo,
+          esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+          origen: 'baseDatos'
+        }
       });
     }
 
@@ -939,11 +1086,19 @@ const clonarComponentesParcial = async (req, res) => {
     // 🧮 CALCULAR SUMA TOTAL
     const sumaTotal = componentesClonados.reduce((sum, c) => sum + parseFloat(c.valor || 0), 0);
 
+    console.log(`✅ Clonación completada: ${componentesClonados.length} componentes (Periodo BD: ${periodo})`);
+
     res.json({
       mensaje: respuesta.mensaje,
       componentesClonados,
       total: componentesClonados.length,
-      sumaTotal: parseFloat(sumaTotal.toFixed(2))
+      sumaTotal: parseFloat(sumaTotal.toFixed(2)),
+      // 🆕 INFORMACIÓN DEL PERIODO USADO
+      periodoInfo: {
+        periodoUsado: periodo,
+        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
+        origen: 'baseDatos'
+      }
     });
 
   } catch (error) {
@@ -2768,7 +2923,7 @@ module.exports = {
   obtenerCalificacionesEquipo,
   guardarCalificacionesAlumno, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
   guardarCalificacionesEquipo, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
-
+  validarParcial, 
   // Funciones de observaciones
   guardarObservacionAlumno,
   guardarObservacionEquipo,
