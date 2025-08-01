@@ -239,559 +239,506 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
 
 // Obtener todos los componentes de un docente/materia/parcial/periodo
 const obtenerComponentesPorMateria = async (req, res) => {
-  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
-
+  const { claveDocente, claveMateria, parcial, periodo } = req.params;
+  
   try {
-    // USAR TU LÓGICA DE PERIODO CON BD
-    const periodo = await validarPeriodo(periodoRecibido);
-    
-    if (!periodo) {
-      return res.status(500).json({ 
-        error: 'No se pudo determinar el periodo actual' 
-      });
-    }
-    
+    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
     
-    console.log(`🔍 Buscando componentes: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}, Docente=${claveDocente}`);
-
+    // 🔥 LLAMAR A TU SP REAL CON NOMBRES CORRECTOS
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
-      .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)  // 👈 Tu parámetro se llama vchPeriodo
       .input('claveDocente', sql.VarChar, claveDocente)
-      .execute(`sp_ObtenerComponentesMateria`);
-
-    // 🆕 CAMBIO: Calcular suma total de puntos (máximo 10)
-    const sumaTotal = result.recordset.reduce((suma, comp) => suma + (comp.valor_componente || 0), 0);
-
-    console.log(`✅ Componentes encontrados: ${result.recordset.length}, Suma total: ${sumaTotal} pts (Periodo BD: ${periodo})`);
+      .execute('sp_ObtenerComponentesMateria');  // 👈 Tu SP real
     
-    res.json({
-      componentes: result.recordset,
-      sumaTotal: parseFloat(sumaTotal.toFixed(2)),
-      disponible: parseFloat((10 - sumaTotal).toFixed(2)), // 🆕 CAMBIO: máximo 10 en lugar de 100
-      validacion: {
-        esValido: sumaTotal <= 10, // 🆕 CAMBIO: validar contra 10
-        esCompleto: sumaTotal === 10, // 🆕 CAMBIO: completo cuando suma 10
-        exceso: sumaTotal > 10 ? parseFloat((sumaTotal - 10).toFixed(2)) : 0, // 🆕 CAMBIO
-        faltante: sumaTotal < 10 ? parseFloat((10 - sumaTotal).toFixed(2)) : 0 // 🆕 CAMBIO
-      },
-      estadisticas: {
-        totalComponentes: result.recordset.length,
-        mayorComponente: result.recordset.length > 0 ? Math.max(...result.recordset.map(c => c.valor_componente)) : 0,
-        menorComponente: result.recordset.length > 0 ? Math.min(...result.recordset.map(c => c.valor_componente)) : 0,
-        promedioComponente: result.recordset.length > 0 ? parseFloat((sumaTotal / result.recordset.length).toFixed(2)) : 0
-      },
-      periodoInfo: {
-        periodoUsado: periodo,
-        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
-        origen: 'baseDatos'
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error al obtener componentes:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-};
-const crearComponente = async (req, res) => {
-  const { 
-    claveMateria, 
-    parcial, 
-    periodo: periodoRecibido, 
-    claveDocente,
-    nombreComponente,
-    valorComponente 
-  } = req.body;
-
-  try {
-    // USAR TU LÓGICA DE PERIODO CON BD
-    const periodo = await validarPeriodo(periodoRecibido);
+    const componentes = result.recordset || [];
     
-    if (!periodo) {
-      return res.status(500).json({ 
-        error: 'No se pudo determinar el periodo actual' 
-      });
-    }
+    // 🔥 MAPEAR TUS COLUMNAS A LAS QUE ESPERA EL FRONTEND
+    const componentesMapeados = componentes.map(comp => ({
+      id_valor_componente: comp.id_valor_componente,
+      nombre_componente: comp.nombre_componente,  // Ya viene como nombre_componente según tu SP
+      valor_componente: comp.valor_componente,
+      id_componente: comp.id_valor_componente  // Usar el mismo ID como referencia
+    }));
     
-    const pool = await sql.connect(config);
+    // 🔥 CALCULAR ESTADÍSTICAS MEJORADAS
+    const sumaTotal = componentesMapeados.reduce((suma, comp) => suma + parseFloat(comp.valor_componente || 0), 0);
+    const disponible = 10 - sumaTotal;
     
-    console.log(`🆕 Creando componente: ${nombreComponente} - ${valorComponente} pts (Periodo BD: ${periodo})`);
-
-    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
-    if (!nombreComponente || !nombreComponente.trim()) {
-      return res.status(400).json({ 
-        error: 'El nombre del componente es obligatorio' 
-      });
-    }
-
-    if (!valorComponente || isNaN(valorComponente)) {
-      return res.status(400).json({ 
-        error: 'El valor del componente debe ser un número válido' 
-      });
-    }
-
-    const valor = parseFloat(valorComponente);
-    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
-    if (valor <= 0 || valor > 10) {
-      return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
-      });
-    }
-
-    // 2. 🔍 VERIFICAR SUMA ACTUAL DE COMPONENTES EXISTENTES
-    const sumaActualResult = await pool.request()
-      .input('claveMateria', sql.VarChar, claveMateria)
-      .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
-      .input('claveDocente', sql.VarChar, claveDocente)
-      .execute(`sp_sumaComponentes`);
-
-    const sumaActual = sumaActualResult.recordset[0].sumaActual;
-    const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
-    const nuevaSuma = parseFloat((sumaActual + valor).toFixed(2));
-
-    // 3. 🚨 VALIDACIONES AVANZADAS DE NEGOCIO ACTUALIZADAS
-    // 🆕 CAMBIO: validar contra suma máxima de 10
-    if (nuevaSuma > 10) {
-      return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 10 puntos`,
-        detalles: {
-          sumaActual: parseFloat(sumaActual.toFixed(2)),
-          valorIntentando: valor,
-          sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
-          disponible: parseFloat((10 - sumaActual).toFixed(2)),
-          sugerencia: `El valor máximo permitido es ${(10 - sumaActual).toFixed(2)} puntos`
-        }
-      });
-    }
-
-    // 🆕 CAMBIO: ajustar validación de valor mínimo para sistema de puntos
-    if (totalComponentes > 0 && valor < 0.5) {
-      return res.status(400).json({ 
-        error: '⚠️ Valor muy pequeño',
-        detalles: {
-          valorMinimo: 0.5,
-          valorIntentando: valor,
-          razon: 'Para mantener un balance adecuado, cada componente debe valer al menos 0.5 puntos'
-        }
-      });
-    }
-
-    if (totalComponentes >= 8) {
-      return res.status(400).json({ 
-        error: '📊 Límite de componentes alcanzado',
-        detalles: {
-          limiteMaximo: 8,
-          componentesActuales: totalComponentes,
-          sugerencia: 'Considera combinar o eliminar componentes existentes'
-        }
-      });
-    }
-
-    // 4. 🔒 VERIFICAR NOMBRE ÚNICO
-    const existeResult = await pool.request()
-      .input('claveMateria', sql.VarChar, claveMateria)
-      .input('parcial', sql.Int, parseInt(parcial))
-      .input('vchPeriodo', sql.VarChar, periodo)
-      .input('claveDocente', sql.VarChar, claveDocente)
-      .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
-      .execute(`sp_existeResult`);
-
-    if (existeResult.recordset[0].existe > 0) {
-      return res.status(400).json({ 
-        error: `🔄 Componente duplicado`,
-        detalles: {
-          nombreExistente: existeResult.recordset[0].nombreExistente,
-          nombreIntentando: nombreComponente.trim(),
-          sugerencia: 'Usa un nombre diferente o modifica el componente existente'
-        }
-      });
-    }
-
-    // 5. 💾 INSERTAR EL NUEVO COMPONENTE
-    await pool.request()
-      .input('claveMateria', sql.VarChar, claveMateria)
-      .input('parcial', sql.Int, parseInt(parcial))
-      .input('claveDocente', sql.VarChar, claveDocente)
-      .input('vchPeriodo', sql.VarChar, periodo)
-      .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
-      .input('valorComponente', sql.Decimal(4,2), valor)
-      .execute(`sp_InsertarComponenteEvaluacion`);
-
-    console.log(`✅ Componente creado: ${nombreComponente} - ${valor} pts (Periodo BD: ${periodo})`);
-
-    // 6. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES ACTUALIZADAS
-    const respuesta = {
-      mensaje: '✅ Componente creado correctamente',
-      componente: {
-        nombre: nombreComponente.trim(),
-        valor: valor
-      },
-      estadisticas: {
-        sumaAnterior: parseFloat(sumaActual.toFixed(2)),
-        sumaNueva: nuevaSuma,
-        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
-        componentesTotales: totalComponentes + 1,
-        progreso: parseFloat(((nuevaSuma / 10) * 100).toFixed(1)) // 🆕 CAMBIO: progreso sobre 10
-      },
-      periodoInfo: {
-        periodoUsado: periodo,
-        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
-        origen: 'baseDatos'
-      }
+    // 🔥 VALIDACIÓN AVANZADA
+    const validacion = {
+      esValido: sumaTotal <= 10,
+      esCompleto: sumaTotal === 10,
+      exceso: Math.max(0, sumaTotal - 10),
+      faltante: Math.max(0, 10 - sumaTotal),
+      progreso: (sumaTotal / 10 * 100).toFixed(1)
     };
 
-    // 🔮 RECOMENDACIONES INTELIGENTES ACTUALIZADAS
-    if (nuevaSuma < 10) {
-      const faltante = 10 - nuevaSuma;
-      respuesta.recomendacion = {
-        tipo: 'completar',
-        mensaje: `Te faltan ${faltante.toFixed(2)} puntos para completar los 10 puntos`,
-        sugerencias: [
-          faltante > 4 ? 'Considera agregar un componente de "Examen" o "Proyecto"' : null,
-          faltante <= 4 && faltante > 2 ? 'Puedes agregar "Participación" o "Tareas"' : null,
-          faltante <= 2 ? 'Un componente pequeño como "Asistencia" completaría los 10 puntos' : null
-        ].filter(Boolean)
-      };
-    } else if (nuevaSuma === 10) {
-      respuesta.felicitacion = {
-        mensaje: '🎉 ¡Perfecto! Has completado los 10 puntos de la ponderación',
-        estado: 'completo'
+    // 🔥 ESTADÍSTICAS ADICIONALES
+    let estadisticas = null;
+    if (componentesMapeados.length > 0) {
+      const valores = componentesMapeados.map(c => parseFloat(c.valor_componente || 0));
+      estadisticas = {
+        totalComponentes: componentesMapeados.length,
+        mayorComponente: Math.max(...valores),
+        menorComponente: Math.min(...valores),
+        promedioComponente: parseFloat((sumaTotal / componentesMapeados.length).toFixed(2))
       };
     }
 
-    res.status(201).json(respuesta);
+    // 🔥 RESPUESTA MEJORADA
+    res.json({
+      componentes: componentesMapeados || [],
+      sumaTotal: parseFloat(sumaTotal.toFixed(2)),
+      disponible: parseFloat(disponible.toFixed(2)),
+      validacion,
+      estadisticas
+    });
+
+    // Cerrar conexión
+    await pool.close();
 
   } catch (error) {
-    console.error('❌ Error al crear componente:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    console.error('Error al obtener componentes:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor al obtener componentes',
+      componentes: [],
+      sumaTotal: 0,
+      disponible: 10,
+      validacion: { esValido: true, esCompleto: false, exceso: 0, faltante: 10 }
+    });
   }
 };
-// 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
-const validarParcial = async (req, res) => {
-  const { claveMateria, parcial, periodo: periodoRecibido, claveDocente } = req.params;
 
+
+const crearComponente = async (req, res) => {
+  const { claveMateria, parcial, periodo, claveDocente, nombreComponente, valorComponente } = req.body;
+  
   try {
-    // 🆕 USAR TU LÓGICA DE PERIODO CON BD
-    const periodo = await validarPeriodo(periodoRecibido);
-    
-    if (!periodo) {
-      return res.status(500).json({ 
-        error: 'No se pudo determinar el periodo actual' 
+    // 🔥 VALIDACIÓN PREVIA
+    if (!valorComponente || valorComponente <= 0 || valorComponente > 10) {
+      return res.status(400).json({
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos',
+        detalles: { valorRecibido: valorComponente },
+        sugerencia: 'Ingresa un valor entre 0.1 y 10 puntos'
       });
     }
-    
+
     const pool = await sql.connect(config);
+
+    // 🔥 OBTENER SUMA ACTUAL - MANEJO SEGURO
+    console.log('🔍 Obteniendo suma actual...');
+    const sumResult = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_sumaComponentes');
     
-    // Aquí puedes implementar lógica de recomendaciones específicas
-    const recomendaciones = [];
+    console.log('📊 Resultado SP:', sumResult);
     
-    console.log(`🔍 Validando parcial: Materia=${claveMateria}, Parcial=${parcial}, Periodo=${periodo}`);
+    // 🔥 MANEJO SEGURO DEL RESULTADO
+    let sumaActual = 0;
+    if (sumResult.recordset && sumResult.recordset.length > 0) {
+      const record = sumResult.recordset[0];
+      // Probar diferentes nombres de columna que podría retornar tu SP
+      sumaActual = parseFloat(record.suma_actual || record.suma || record.total || record.sumaTotal || 0);
+    }
     
-    res.json({
-      recomendaciones,
-      periodoInfo: {
-        periodoUsado: periodo,
-        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
-        origen: 'baseDatos'
-      }
+    console.log('✅ Suma actual:', sumaActual);
+    
+    const nuevaSuma = sumaActual + parseFloat(valorComponente);
+    const disponible = 10 - sumaActual;
+
+    // 🔥 VALIDACIÓN: No exceder 10 puntos
+    if (nuevaSuma > 10) {
+      return res.status(400).json({
+        error: `No se puede exceder los 10 puntos del parcial`,
+        detalles: {
+          sumaActual,
+          valorIntentado: parseFloat(valorComponente),
+          nuevaSuma,
+          disponible,
+          exceso: nuevaSuma - 10
+        },
+        sugerencia: `Máximo valor permitido: ${disponible} puntos`
+      });
+    }
+
+    // 🔥 AUTO-AJUSTE
+    let valorFinal = parseFloat(valorComponente);
+    let seAutoAjusto = false;
+    
+    if (nuevaSuma > 10 - 0.1 && nuevaSuma < 10) {
+      valorFinal = disponible;
+      seAutoAjusto = true;
+    }
+
+    // 🔥 CREAR COMPONENTE
+    console.log('📝 Creando componente...');
+    const result = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('nombreComponente', sql.VarChar, nombreComponente)
+      .input('valorComponente', sql.Decimal(5,2), valorFinal)
+      .execute('sp_InsertarComponenteEvaluacion');
+
+    // 🔥 ESTADÍSTICAS
+    const nuevaSumaFinal = sumaActual + valorFinal;
+    const nuevoDisponible = 10 - nuevaSumaFinal;
+    
+    // 🔥 RESPUESTA INTELIGENTE
+    let recomendacion = null;
+    let felicitacion = null;
+    
+    if (nuevaSumaFinal === 10) {
+      felicitacion = {
+        tipo: 'perfecto',
+        mensaje: '🎉 ¡Excelente! El parcial está completo con exactamente 10 puntos.'
+      };
+    } else if (nuevoDisponible <= 2) {
+      recomendacion = {
+        tipo: 'info',
+        mensaje: `Quedan ${nuevoDisponible.toFixed(1)} puntos por asignar.`
+      };
+    }
+
+    res.status(201).json({
+      mensaje: seAutoAjusto 
+        ? `Componente creado y auto-ajustado a ${valorFinal} puntos` 
+        : 'Componente creado exitosamente',
+      id_componente: result.recordset?.[0]?.id_componente || 'creado',
+      estadisticas: {
+        valorAsignado: valorFinal,
+        sumaNueva: nuevaSumaFinal,
+        disponible: nuevoDisponible,
+        progreso: (nuevaSumaFinal / 10 * 100).toFixed(1)
+      },
+      ajustes: seAutoAjusto ? {
+        valorOriginal: parseFloat(valorComponente),
+        valorFinal: valorFinal,
+        razon: 'Auto-ajustado para optimizar la suma total'
+      } : null,
+      recomendacion,
+      felicitacion
     });
 
   } catch (error) {
-    console.error('❌ Error al validar parcial:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    console.error('Error al crear componente:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor al crear el componente',
+      detalles: { mensaje: error.message }
+    });
+  }
+};
+
+
+
+// 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
+// ========================================
+const validarParcial = async (req, res) => {
+  const { claveDocente, claveMateria, parcial, periodo } = req.params;
+  
+  try {
+    const pool = await sql.connect(config);
+
+    console.log('🔍 Validando parcial...');
+    
+    // 🔥 OBTENER COMPONENTES DIRECTAMENTE (más seguro)
+    const componentesResult = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_ObtenerComponentesMateria');
+    
+    const componentes = componentesResult.recordset || [];
+    const sumaTotal = componentes.reduce((suma, comp) => suma + parseFloat(comp.valor_componente || 0), 0);
+    const disponible = 10 - sumaTotal;
+    const cantidadComponentes = componentes.length;
+
+    // 🔥 RECOMENDACIONES INTELIGENTES
+    const recomendaciones = [];
+
+    if (sumaTotal === 10) {
+      recomendaciones.push({
+        tipo: 'perfecto',
+        icono: '🎉',
+        titulo: 'Parcial Perfecto',
+        mensaje: 'El parcial suma exactamente 10 puntos. ¡Excelente configuración!',
+        acciones: ['Ya puedes crear actividades para este parcial']
+      });
+    } else if (sumaTotal === 0) {
+      recomendaciones.push({
+        tipo: 'info',
+        icono: '🚀',
+        titulo: 'Comenzar Configuración',
+        mensaje: 'Este parcial está vacío. Es hora de configurar los componentes de evaluación.',
+        acciones: [
+          'Agrega "Actividades" con 4-5 puntos',
+          'Agrega "Examen" con 5-6 puntos',
+          'Considera "Participación" con 1-2 puntos'
+        ]
+      });
+    } else if (sumaTotal > 10) {
+      recomendaciones.push({
+        tipo: 'critico',
+        icono: '⚠️',
+        titulo: 'Exceso de Puntos',
+        mensaje: `El parcial excede por ${(sumaTotal - 10).toFixed(1)} puntos.`,
+        acciones: [
+          'Reduce el valor de los componentes más altos',
+          'Elimina componentes innecesarios'
+        ]
+      });
+    } else if (disponible <= 2 && disponible > 0) {
+      recomendaciones.push({
+        tipo: 'advertencia',
+        icono: '🔸',
+        titulo: 'Casi Completo',
+        mensaje: `Solo faltan ${disponible.toFixed(1)} puntos para completar.`,
+        acciones: [`Agrega un componente con ${disponible.toFixed(1)} puntos`]
+      });
+    } else if (disponible > 2) {
+      recomendaciones.push({
+        tipo: 'sugerencia',
+        icono: '💡',
+        titulo: 'Parcial Incompleto',
+        mensaje: `Faltan ${disponible.toFixed(1)} puntos por asignar.`,
+        acciones: ['Agrega más componentes de evaluación']
+      });
+    }
+
+    res.json({
+      suma: sumaTotal,
+      disponible,
+      cantidadComponentes,
+      estado: sumaTotal === 10 ? 'completo' : sumaTotal > 10 ? 'excedido' : 'incompleto',
+      recomendaciones
+    });
+
+  } catch (error) {
+    console.error('Error en validación de parcial:', error);
+    res.status(500).json({
+      error: 'Error al validar parcial',
+      recomendaciones: []
+    });
   }
 };
 // Modificar un componente existente
 const modificarComponente = async (req, res) => {
   const { idComponente } = req.params;
   const { nombreComponente, valorComponente } = req.body;
-
+  
   try {
+    // 🔥 VALIDACIÓN DE VALOR
+    if (!valorComponente || valorComponente <= 0 || valorComponente > 10) {
+      return res.status(400).json({
+        error: 'El valor del componente debe estar entre 0.1 y 10 puntos',
+        detalles: { valorRecibido: valorComponente },
+        sugerencia: 'Ingresa un valor entre 0.1 y 10 puntos'
+      });
+    }
+
+    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
+
+    // 🔥 OBTENER INFO DEL COMPONENTE ACTUAL (con consulta directa ya que no veo SP específico)
+    const componenteInfo = await pool.request()
+      .input('idComponente', sql.Int, idComponente)
+      .query(`
+        SELECT *
+        FROM tbl_valor_componentes_evaluacion
+        WHERE id_valor_componente = @idComponente
+      `);
     
-    console.log(`🔄 Modificando componente ID: ${idComponente}`);
-
-    // 1. 🛡️ VALIDACIONES BÁSICAS ACTUALIZADAS
-    if (!nombreComponente || !nombreComponente.trim()) {
-      return res.status(400).json({ 
-        error: 'El nombre del componente es obligatorio' 
+    if (!componenteInfo.recordset || componenteInfo.recordset.length === 0) {
+      await pool.close();
+      return res.status(404).json({
+        error: 'Componente no encontrado'
       });
     }
 
-    const valor = parseFloat(valorComponente);
-    // 🆕 CAMBIO: validar rango de 0.1 a 10 puntos
-    if (isNaN(valor) || valor <= 0 || valor > 10) {
-      return res.status(400).json({ 
-        error: 'El valor del componente debe estar entre 0.1 y 10 puntos' 
-      });
-    }
+    const componente = componenteInfo.recordset[0];
+    const valorAnterior = parseFloat(componente.valor_componente);
 
-    // 2. 🔍 OBTENER DATOS ACTUALES DEL COMPONENTE
-    const componenteActualResult = await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_componenteActualResult`);
-
-    if (componenteActualResult.recordset.length === 0) {
-      return res.status(404).json({ error: 'Componente no encontrado' });
-    }
-
-    const componenteActual = componenteActualResult.recordset[0];
-
-    // 3. 🚨 VERIFICAR SI EL COMPONENTE ESTÁ SIENDO USADO EN ACTIVIDADES
-    const actividadesResult = await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_actividadesResult`);
-
-    const { totalActividades, titulosActividades } = actividadesResult.recordset[0];
-
-    // 3.1 Si hay actividades, restringir cambios drásticos
-    // 🆕 CAMBIO: ajustar límite de cambio para sistema de puntos (3 puntos máximo)
-    if (totalActividades > 0) {
-      const cambioValor = Math.abs(valor - componenteActual.valor_componente);
-      
-      if (cambioValor > 3) {
-        return res.status(400).json({ 
-          error: '🔒 Cambio de valor muy drástico',
-          detalles: {
-            valorActual: componenteActual.valor_componente,
-            valorPropuesto: valor,
-            cambio: parseFloat(cambioValor.toFixed(2)),
-            limitePermitido: 3,
-            actividadesAfectadas: totalActividades,
-            razon: 'Este componente tiene actividades asignadas. Los cambios grandes pueden afectar las calificaciones.'
-          },
-          sugerencia: `Considera hacer un cambio menor (máximo ±3 puntos) o crear un nuevo componente`
-        });
-      }
-
-      console.log(`⚠️ Modificando componente con ${totalActividades} actividades: ${titulosActividades}`);
-    }
-
-    // 4. 📊 VERIFICAR SUMA TOTAL EXCLUYENDO EL COMPONENTE ACTUAL
-    const sumaOtrosResult = await pool.request()
-      .input('claveMateria', sql.VarChar, componenteActual.vchClvMateria)
-      .input('parcial', sql.Int, componenteActual.parcial)
-      .input('vchPeriodo', sql.VarChar, componenteActual.vchPeriodo)
-      .input('claveDocente', sql.VarChar, componenteActual.vchClvTrabajador)
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_sumaOtrosResult`);
-
-    const sumaOtros = sumaOtrosResult.recordset[0].sumaOtros;
-    const nuevaSuma = parseFloat((sumaOtros + valor).toFixed(2));
-
-    // 5. 🚨 VALIDAR QUE NO EXCEDA 10 PUNTOS
-    if (nuevaSuma > 10) {
-      return res.status(400).json({ 
-        error: `❌ La suma no puede exceder 10 puntos`,
-        detalles: {
-          otrosComponentes: parseFloat(sumaOtros.toFixed(2)),
-          valorPropuesto: valor,
-          sumaPropuesta: nuevaSuma,
-          exceso: parseFloat((nuevaSuma - 10).toFixed(2)),
-          disponible: parseFloat((10 - sumaOtros).toFixed(2)),
-          valorMaximo: parseFloat((10 - sumaOtros).toFixed(2))
-        }
-      });
-    }
-
-    // 6. 🔒 VERIFICAR NOMBRE ÚNICO (excluyendo el actual)
-    if (nombreComponente.trim().toUpperCase() !== componenteActual.componente.trim().toUpperCase()) {
-      const existeResult = await pool.request()
-        .input('claveMateria', sql.VarChar, componenteActual.vchClvMateria)
-        .input('parcial', sql.Int, componenteActual.parcial)
-        .input('vchPeriodo', sql.VarChar, componenteActual.vchPeriodo)
-        .input('claveDocente', sql.VarChar, componenteActual.vchClvTrabajador)
-        .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
-        .input('idComponente', sql.Int, parseInt(idComponente))
-        .execute(`sp_verificarNombre`);
-
-      if (existeResult.recordset[0].existe > 0) {
-        return res.status(400).json({ 
-          error: `🔄 Ya existe otro componente con ese nombre en este parcial` 
-        });
-      }
-    }
-
-    // 7. 💾 ACTUALIZAR EL COMPONENTE
-    await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .input('nombreComponente', sql.NVarChar, nombreComponente.trim())
-      .input('valorComponente', sql.Decimal(4,2), valor)
-      .execute(`sp_ActualizarComponente`);
-
-    console.log(`✅ Componente modificado: ${nombreComponente} - ${valor} pts`);
-    
-    // 8. 🎯 RESPUESTA DETALLADA
-    const respuesta = {
-      mensaje: totalActividades > 0 ? 
-        `✅ Componente modificado (${totalActividades} actividades afectadas)` : 
-        '✅ Componente modificado correctamente',
-      cambios: {
-        nombre: {
-          anterior: componenteActual.componente,
-          nuevo: nombreComponente.trim(),
-          cambio: componenteActual.componente !== nombreComponente.trim()
-        },
-        valor: {
-          anterior: componenteActual.valor_componente,
-          nuevo: valor,
-          diferencia: parseFloat((valor - componenteActual.valor_componente).toFixed(2))
-        }
-      },
-      estadisticas: {
-        sumaOtros: parseFloat(sumaOtros.toFixed(2)),
-        sumaNueva: nuevaSuma,
-        disponible: parseFloat((10 - nuevaSuma).toFixed(2)) // 🆕 CAMBIO
-      }
-    };
-
-    if (totalActividades > 0) {
-      respuesta.advertencia = {
-        actividadesAfectadas: totalActividades,
-        mensaje: 'Las calificaciones de las actividades existentes podrían verse afectadas',
-        recomendacion: 'Revisa las calificaciones después de este cambio'
-      };
-    }
-
-    res.json(respuesta);
-
-  } catch (error) {
-    console.error('❌ Error al modificar componente:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-};
-
-const eliminarComponente = async (req, res) => {
-  const { idComponente } = req.params;
-
-  try {
-    const pool = await sql.connect(config);
-    
-    console.log(`🗑️ Eliminando componente ID: ${idComponente}`);
-
-    // 1. 🔍 VERIFICAR QUE EL COMPONENTE EXISTE
-    const componenteResult = await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_ComponenteResult`);
-
-    if (componenteResult.recordset.length === 0) {
-      return res.status(404).json({ error: 'Componente no encontrado' });
-    }
-
-    const componente = componenteResult.recordset[0];
-
-    // 2. 🚨 VERIFICACIÓN CRÍTICA: ACTIVIDADES ASOCIADAS
-    const actividadesResult = await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_actividadesResult`);
-
-    const { totalActividades, titulosActividades, idsActividades } = actividadesResult.recordset[0];
-
-    if (totalActividades > 0) {
-      return res.status(400).json({ 
-        error: `🔒 No se puede eliminar el componente "${componente.componente}"`,
-        razon: 'PROTECCIÓN DE DATOS',
-        detalles: {
-          actividadesVinculadas: totalActividades,
-          actividades: titulosActividades ? titulosActividades.split(',').map(t => t.trim()) : [],
-          impacto: 'La eliminación afectaría las calificaciones de los estudiantes'
-        },
-        soluciones: [
-          'Elimina primero todas las actividades que usan este componente',
-          'Modifica las actividades para usar otro componente',
-          'Cambia el valor del componente a 0 puntos en lugar de eliminarlo'
-        ],
-        codigoDeSeguridad: 'COMPONENT_IN_USE'
-      });
-    }
-
-    // 3. 📊 VERIFICAR IMPACTO EN LA SUMA TOTAL
-    const sumaActualResult = await pool.request()
+    // 🔥 OBTENER SUMA ACTUAL DEL PARCIAL CON TU SP
+    const sumResult = await pool.request()
       .input('claveMateria', sql.VarChar, componente.vchClvMateria)
       .input('parcial', sql.Int, componente.parcial)
-      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)
+      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)  // 👈 Cambio aquí
       .input('claveDocente', sql.VarChar, componente.vchClvTrabajador)
-      .execute(`sp_sumaActualResult`);
+      .execute('sp_sumaComponentes');
+    
+    const sumaTotal = parseFloat(sumResult.recordset[0]?.suma_actual || sumResult.recordset[0]?.suma || 0);
+    const sumaSinEsteComponente = sumaTotal - valorAnterior;
+    const nuevaSuma = sumaSinEsteComponente + parseFloat(valorComponente);
+    const disponibleSinEste = 10 - sumaSinEsteComponente;
 
-    const sumaActual = sumaActualResult.recordset[0].sumaTotal;
-    const totalComponentes = sumaActualResult.recordset[0].totalComponentes;
-    const nuevaSuma = sumaActual - componente.valor_componente;
-
-    // 4. ⚠️ VALIDACIÓN: ¿QUEDARÁ INCOMPLETO EL PARCIAL?
-    if (totalComponentes === 1) {
-      return res.status(400).json({ 
-        error: `⚠️ No puedes eliminar el único componente del parcial`,
+    // 🔥 VALIDACIÓN: No exceder 10 puntos
+    if (nuevaSuma > 10) {
+      await pool.close();
+      return res.status(400).json({
+        error: `La modificación excedería los 10 puntos del parcial`,
         detalles: {
-          componentesRestantes: 0,
-          impacto: 'El parcial quedaría sin componentes de evaluación',
-          sugerencia: 'Modifica el componente existente o agrega otro antes de eliminar este'
-        }
+          valorAnterior,
+          valorNuevo: parseFloat(valorComponente),
+          sumaActual: sumaTotal,
+          nuevaSuma,
+          disponible: disponibleSinEste,
+          exceso: nuevaSuma - 10
+        },
+        sugerencia: `Máximo valor permitido: ${disponibleSinEste} puntos`
       });
     }
 
-    // 5. 🔥 ADVERTENCIA SOBRE PÉRDIDA DE PUNTOS
-    if (sumaActual === 10 && componente.valor_componente > 0) {
-      console.log(`⚠️ ADVERTENCIA: Se perderán ${componente.valor_componente} puntos de la ponderación total`);
+    // 🔥 AUTO-AJUSTE SI ESTÁ MUY CERCA
+    let valorFinal = parseFloat(valorComponente);
+    let seAutoAjusto = false;
+    
+    if (nuevaSuma > 10 - 0.1 && nuevaSuma < 10) {
+      valorFinal = disponibleSinEste;
+      seAutoAjusto = true;
     }
 
-    // 6. 🗑️ PROCEDER CON LA ELIMINACIÓN
+    // 🔥 MODIFICAR EL COMPONENTE CON TU SP
     await pool.request()
-      .input('idComponente', sql.Int, parseInt(idComponente))
-      .execute(`sp_EliminarComponenteEvaluacion`);
+      .input('idComponente', sql.Int, idComponente)
+      .input('nombreComponente', sql.VarChar, nombreComponente)
+      .input('valorComponente', sql.Decimal(5,2), valorFinal)
+      .execute('sp_ActualizarComponente');
 
-    console.log(`✅ Componente eliminado: ${componente.componente} - ${componente.valor_componente} pts`);
-    console.log(`📊 Nueva suma total: ${nuevaSuma} pts`);
+    // 🔥 ESTADÍSTICAS POST-MODIFICACIÓN
+    const nuevaSumaFinal = sumaSinEsteComponente + valorFinal;
+    const nuevoDisponible = 10 - nuevaSumaFinal;
 
-    // 7. 🎯 RESPUESTA DETALLADA CON RECOMENDACIONES
-    const respuesta = {
-      mensaje: '✅ Componente eliminado correctamente',
-      componenteEliminado: {
-        nombre: componente.componente,
-        valor: componente.valor_componente
+    // 🔥 RESPUESTA INTELIGENTE
+    let recomendacion = null;
+    let felicitacion = null;
+    
+    if (nuevaSumaFinal === 10) {
+      felicitacion = {
+        tipo: 'perfecto',
+        mensaje: '✨ ¡Perfecto! El parcial ahora suma exactamente 10 puntos.'
+      };
+    } else if (nuevoDisponible <= 1) {
+      recomendacion = {
+        tipo: 'info',
+        mensaje: `Solo quedan ${nuevoDisponible.toFixed(1)} puntos por asignar.`
+      };
+    }
+
+    res.json({
+      mensaje: seAutoAjusto 
+        ? `Componente modificado y auto-ajustado a ${valorFinal} puntos` 
+        : 'Componente modificado exitosamente',
+      estadisticas: {
+        valorAnterior,
+        valorFinal,
+        diferencia: valorFinal - valorAnterior,
+        sumaNueva: nuevaSumaFinal,
+        disponible: nuevoDisponible
       },
-      impacto: {
-        sumaAnterior: parseFloat(sumaActual.toFixed(2)),
-        sumaNueva: parseFloat(nuevaSuma.toFixed(2)),
-        valorLiberado: componente.valor_componente,
-        disponible: parseFloat((10 - nuevaSuma).toFixed(2)), // 🆕 CAMBIO
-        componentesRestantes: totalComponentes - 1
-      }
-    };
+      ajustes: seAutoAjusto ? {
+        valorIntentado: parseFloat(valorComponente),
+        valorFinal: valorFinal,
+        razon: 'Auto-ajustado para no exceder 10 puntos'
+      } : null,
+      recomendacion,
+      felicitacion
+    });
 
-    // 🔮 RECOMENDACIONES INTELIGENTES POST-ELIMINACIÓN
-    if (nuevaSuma < 10) {
-      const faltante = 10 - nuevaSuma;
-      respuesta.recomendacion = {
-        tipo: 'rebalancear',
-        mensaje: `Considera redistribuir los ${faltante.toFixed(2)} puntos liberados`,
-        opciones: [
-          'Incrementar el valor de un componente existente',
-          'Crear un nuevo componente con el valor liberado',
-          `Distribuir proporcionalmente entre los ${totalComponentes - 1} componentes restantes`
-        ]
-      };
-    }
-
-    if (nuevaSuma < 5) {
-      respuesta.alerta = {
-        tipo: 'suma_muy_baja',
-        mensaje: '⚠️ La suma total está muy baja. Considera agregar más componentes.',
-        sumaTotalActual: parseFloat(nuevaSuma.toFixed(2))
-      };
-    }
-
-    res.json(respuesta);
+    await pool.close();
 
   } catch (error) {
-    console.error('❌ Error al eliminar componente:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    console.error('Error al modificar componente:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor al modificar el componente'
+    });
   }
 };
+const eliminarComponente = async (req, res) => {
+  const { idComponente } = req.params;
+  
+  try {
+    // 🔥 CONECTAR A SQL SERVER
+    const pool = await sql.connect(config);
 
+    // 🔥 VERIFICAR SI TIENE ACTIVIDADES VINCULADAS CON TU SP
+    const vinculaciones = await pool.request()
+      .input('idComponente', sql.Int, idComponente)
+      .execute('sp_VerificarActividadesConComponentes');
+
+    if (vinculaciones.recordset[0]?.cantidad > 0) {
+      const actividades = vinculaciones.recordsets[1] || [];
+      await pool.close();
+      
+      return res.status(400).json({
+        error: 'No se puede eliminar el componente porque tiene actividades vinculadas',
+        detalles: {
+          actividadesVinculadas: vinculaciones.recordset[0].cantidad,
+          actividades: actividades.map(a => a.nombre_actividad || a.actividad)
+        },
+        soluciones: [
+          'Elimina primero las actividades vinculadas',
+          'O cambia las actividades a otro componente'
+        ]
+      });
+    }
+
+    // 🔥 OBTENER INFO ANTES DE ELIMINAR
+    const componenteInfo = await pool.request()
+      .input('idComponente', sql.Int, idComponente)
+      .query(`
+        SELECT *
+        FROM tbl_valor_componentes_evaluacion
+        WHERE id_valor_componente = @idComponente
+      `);
+
+    const componente = componenteInfo.recordset[0];
+    const valorLiberado = parseFloat(componente?.valor_componente || 0);
+
+    // 🔥 ELIMINAR EL COMPONENTE CON TU SP
+    const result = await pool.request()
+      .input('idComponente', sql.Int, idComponente)
+      .execute('sp_EliminarComponenteEvaluacion');
+
+    // 🔥 CALCULAR NUEVA SUMA CON TU SP
+    const nuevaSumaResult = await pool.request()
+      .input('claveMateria', sql.VarChar, componente.vchClvMateria)
+      .input('parcial', sql.Int, componente.parcial)
+      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)  // 👈 Cambio aquí
+      .input('claveDocente', sql.VarChar, componente.vchClvTrabajador)
+      .execute('sp_sumaComponentes');
+
+    const sumaNueva = parseFloat(nuevaSumaResult.recordset[0]?.suma_actual || nuevaSumaResult.recordset[0]?.suma || 0);
+    const nuevoDisponible = 10 - sumaNueva;
+
+    res.json({
+      mensaje: 'Componente eliminado exitosamente',
+      impacto: {
+        valorLiberado,
+        sumaNueva,
+        disponible: nuevoDisponible
+      },
+      recomendacion: nuevoDisponible > 0 ? {
+        mensaje: `Tienes ${nuevoDisponible.toFixed(1)} puntos disponibles para asignar.`
+      } : null
+    });
+
+    await pool.close();
+
+  } catch (error) {
+    console.error('Error al eliminar componente:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor al eliminar el componente'
+    });
+  }
+};
 const validarComplecionParcial = async (req, res) => {
   const { claveMateria, parcial, periodo, claveDocente } = req.params;
 
@@ -1030,80 +977,89 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
 // 🆕 FUNCIÓN: Clonar componentes de un parcial a otro
 // 🔧 REEMPLAZAR tu función clonarComponentesParcial con esta versión:
 const clonarComponentesParcial = async (req, res) => {
-  const { 
-    claveMateria, 
-    parcialOrigen, 
-    parcialDestino, 
-    periodo: periodoRecibido, // 🆕 CAMBIAR NOMBRE
-    claveDocente 
-  } = req.body;
-
+  const { claveMateria, parcialOrigen, parcialDestino, periodo, claveDocente } = req.body;
+  
   try {
-    // 🆕 USAR PERIODO AUTOMÁTICO DE BD
-    const periodo = await validarPeriodo(periodoRecibido);
+    // 🔥 CONECTAR A SQL SERVER
+    const pool = await sql.connect(config);
+
+    // 🔥 VERIFICAR QUE EL PARCIAL DESTINO ESTÉ VACÍO
+    const destinoCheck = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcialDestino)
+      .input('periodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_verificar_parcial_vacio');
     
-    if (!periodo) {
-      return res.status(500).json({ 
-        error: 'No se pudo determinar el periodo actual' 
+    if (destinoCheck.recordset[0]?.cantidad > 0) {
+      await pool.close();
+      return res.status(400).json({
+        error: 'El parcial destino ya tiene componentes configurados',
+        sugerencia: 'Elimina primero los componentes existentes o elige otro parcial'
       });
     }
 
-    console.log(`📋 Clonando componentes: ${parcialOrigen} → ${parcialDestino} (Periodo BD: ${periodo})`);
+    // 🔥 OBTENER COMPONENTES DEL PARCIAL ORIGEN
+    const componentesOrigen = await pool.request()
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcialOrigen)
+      .input('periodo', sql.VarChar, periodo)
+      .execute('sp_obtener_componentes_materia');
+    
+    const componentes = componentesOrigen.recordset || [];
+    
+    if (componentes.length === 0) {
+      await pool.close();
+      return res.status(400).json({
+        error: 'El parcial origen no tiene componentes para clonar',
+        sugerencia: 'Configura primero los componentes del parcial origen'
+      });
+    }
 
-    const pool = await sql.connect(config);
+    // 🔥 VERIFICAR QUE LA SUMA SEA EXACTAMENTE 10
+    const sumaOrigen = componentes.reduce((suma, comp) => suma + parseFloat(comp.valor_componente || 0), 0);
+    
+    if (sumaOrigen !== 10) {
+      await pool.close();
+      return res.status(400).json({
+        error: `El parcial origen suma ${sumaOrigen} puntos en lugar de 10`,
+        sugerencia: 'Completa primero el parcial origen antes de clonarlo'
+      });
+    }
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (hace todo: verifica, valida y clona)
+    // 🔥 CLONAR COMPONENTES
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialOrigen', sql.Int, parcialOrigen)
       .input('parcialDestino', sql.Int, parcialDestino)
-      .input('periodo', sql.VarChar, periodo) // 🆕 USAR PERIODO VALIDADO
+      .input('periodo', sql.VarChar, periodo)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .execute('sp_componentesClonados');
+      .execute('sp_clonar_componentes_parcial');
 
-    const respuesta = result.recordset[0];
-
-    // 🎯 MANEJAR RESPUESTA DEL STORED PROCEDURE
-    if (respuesta.resultado === 'ERROR') {
-      return res.status(400).json({ 
-        error: respuesta.mensaje,
-        componentesClonados: respuesta.componentesClonados || 0,
-        // 🆕 INFORMACIÓN DEL PERIODO
-        periodoInfo: {
-          periodoUsado: periodo,
-          esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
-          origen: 'baseDatos'
-        }
-      });
-    }
-
-    // ✅ CASO EXITOSO: Procesar los componentes clonados
-    const componentesClonados = result.recordset.map(componente => ({
-      nombre: componente.nombre || componente.componente,
-      valor: componente.valor || componente.valor_componente
-    }));
-
-    // 🧮 CALCULAR SUMA TOTAL
-    const sumaTotal = componentesClonados.reduce((sum, c) => sum + parseFloat(c.valor || 0), 0);
-
-    console.log(`✅ Clonación completada: ${componentesClonados.length} componentes (Periodo BD: ${periodo})`);
+    const componentesClonados = result.recordset[0]?.total || componentes.length;
 
     res.json({
-      mensaje: respuesta.mensaje,
-      componentesClonados,
-      total: componentesClonados.length,
-      sumaTotal: parseFloat(sumaTotal.toFixed(2)),
-      // 🆕 INFORMACIÓN DEL PERIODO USADO
-      periodoInfo: {
-        periodoUsado: periodo,
-        esAutomatico: periodoRecibido === 'auto' || !periodoRecibido,
-        origen: 'baseDatos'
+      mensaje: `${componentesClonados} componentes clonados exitosamente`,
+      total: componentesClonados,
+      sumaTotal: 10,
+      parcialOrigen,
+      parcialDestino,
+      detalles: {
+        componentesClonados: componentes.map(c => ({
+          nombre: c.nombre_componente,
+          valor: c.valor_componente
+        }))
       }
     });
 
+    await pool.close();
+
   } catch (error) {
-    console.error('❌ Error al clonar componentes:', error);
-    res.status(500).json({ error: 'Error del servidor' });
+    console.error('Error al clonar componentes:', error);
+    res.status(500).json({
+      error: 'Error interno del servidor al clonar componentes'
+    });
   }
 };
 
@@ -2871,6 +2827,412 @@ const obtenerEstadisticasCentroControl = async (req, res) => {
     });
   }
 };
+
+const guardarComponentesMasivo = async (req, res) => {
+  const { 
+    claveMateria, 
+    parcial, 
+    periodo, 
+    claveDocente, 
+    operaciones
+  } = req.body;
+
+  let pool;
+  let transaction;
+
+  try {
+    // 🔥 CONECTAR AL POOL PRIMERO
+    pool = await sql.connect(config);
+    
+    // 🔥 CREAR TRANSACCIÓN DESDE EL POOL
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    console.log(`🔄 Iniciando guardado masivo: ${operaciones.length} operaciones`);
+
+    // 🔥 VALIDAR QUE LA SUMA FINAL SEA EXACTAMENTE 10
+    const operacionesCrear = operaciones.filter(op => op.tipo === 'crear');
+    const operacionesModificar = operaciones.filter(op => op.tipo === 'modificar');
+    const operacionesEliminar = operaciones.filter(op => op.tipo === 'eliminar');
+
+    // Calcular suma después de todas las operaciones
+    let sumaFinal = 0;
+
+    // Obtener suma actual de componentes que NO se van a eliminar ni modificar
+    const componentesActualesResult = await transaction.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_ObtenerComponentesMateria');
+
+    const componentesActuales = componentesActualesResult.recordset || [];
+    
+    // Sumar componentes que se mantienen sin cambios
+    componentesActuales.forEach(comp => {
+      const seElimina = operacionesEliminar.some(op => op.id === comp.id_valor_componente);
+      const seModifica = operacionesModificar.some(op => op.id === comp.id_valor_componente);
+      
+      if (!seElimina && !seModifica) {
+        sumaFinal += parseFloat(comp.valor_componente || 0);
+      }
+    });
+
+    // Sumar componentes nuevos
+    operacionesCrear.forEach(op => {
+      sumaFinal += parseFloat(op.valorComponente || 0);
+    });
+
+    // Sumar componentes modificados
+    operacionesModificar.forEach(op => {
+      sumaFinal += parseFloat(op.valorComponente || 0);
+    });
+
+    console.log(`📊 Suma final calculada: ${sumaFinal}`);
+
+    // 🚨 VALIDAR QUE SEA EXACTAMENTE 10
+    if (Math.abs(sumaFinal - 10) > 0.01) {
+      await transaction.rollback();
+      return res.status(400).json({
+        error: `La suma final debe ser exactamente 10 puntos`,
+        detalles: {
+          sumaCalculada: sumaFinal,
+          diferencia: sumaFinal - 10,
+          operacionesRecibidas: operaciones.length
+        },
+        sugerencia: `Ajusta los valores para que sumen exactamente 10 puntos`
+      });
+    }
+
+    // 📊 CONTADORES PARA RESPUESTA
+    let componentesCreados = 0;
+    let componentesModificados = 0;
+    let componentesEliminados = 0;
+    const errores = [];
+
+    // 🔥 PASO 1: ELIMINAR COMPONENTES
+    for (const operacion of operacionesEliminar) {
+      try {
+        console.log(`🗑️ Eliminando componente ID: ${operacion.id}`);
+        
+        // Verificar si tiene actividades vinculadas
+        const vinculaciones = await transaction.request()
+          .input('idComponente', sql.Int, operacion.id)
+          .execute('sp_VerificarActividadesConComponentes');
+
+        if (vinculaciones.recordset[0]?.cantidad > 0) {
+          errores.push({
+            operacion: 'eliminar',
+            id: operacion.id,
+            error: 'Tiene actividades vinculadas'
+          });
+          continue;
+        }
+
+        // Eliminar si no tiene vinculaciones
+        await transaction.request()
+          .input('idComponente', sql.Int, operacion.id)
+          .execute('sp_EliminarComponenteEvaluacion');
+
+        componentesEliminados++;
+        console.log(`✅ Componente ${operacion.id} eliminado`);
+
+      } catch (error) {
+        console.error(`❌ Error al eliminar componente ${operacion.id}:`, error);
+        errores.push({
+          operacion: 'eliminar',
+          id: operacion.id,
+          error: error.message
+        });
+      }
+    }
+
+    // 🔥 PASO 2: CREAR COMPONENTES NUEVOS
+    for (const operacion of operacionesCrear) {
+      try {
+        console.log(`🆕 Creando componente: ${operacion.nombreComponente}`);
+
+        await transaction.request()
+          .input('claveMateria', sql.VarChar, claveMateria)
+          .input('parcial', sql.Int, parcial)
+          .input('vchPeriodo', sql.VarChar, periodo)
+          .input('claveDocente', sql.VarChar, claveDocente)
+          .input('nombreComponente', sql.VarChar, operacion.nombreComponente)
+          .input('valorComponente', sql.Decimal(5,2), operacion.valorComponente)
+          .execute('sp_InsertarComponenteEvaluacion');
+
+        componentesCreados++;
+        console.log(`✅ Componente "${operacion.nombreComponente}" creado`);
+
+      } catch (error) {
+        console.error(`❌ Error al crear componente "${operacion.nombreComponente}":`, error);
+        errores.push({
+          operacion: 'crear',
+          nombre: operacion.nombreComponente,
+          error: error.message
+        });
+      }
+    }
+
+    // 🔥 PASO 3: MODIFICAR COMPONENTES EXISTENTES
+    for (const operacion of operacionesModificar) {
+      try {
+        console.log(`✏️ Modificando componente ID: ${operacion.id}`);
+
+        await transaction.request()
+          .input('idComponente', sql.Int, operacion.id)
+          .input('nombreComponente', sql.VarChar, operacion.nombreComponente)
+          .input('valorComponente', sql.Decimal(5,2), operacion.valorComponente)
+          .execute('sp_ActualizarComponente');
+
+        componentesModificados++;
+        console.log(`✅ Componente ${operacion.id} modificado`);
+
+      } catch (error) {
+        console.error(`❌ Error al modificar componente ${operacion.id}:`, error);
+        errores.push({
+          operacion: 'modificar',
+          id: operacion.id,
+          error: error.message
+        });
+      }
+    }
+
+    // 🎯 VERIFICAR SI HUBO ERRORES CRÍTICOS
+    const erroresTotales = errores.length;
+    const operacionesTotales = operaciones.length;
+    const operacionesExitosas = componentesCreados + componentesModificados + componentesEliminados;
+
+    if (erroresTotales > 0 && operacionesExitosas === 0) {
+      // Todos fallaron
+      await transaction.rollback();
+      return res.status(500).json({
+        error: 'Todas las operaciones fallaron',
+        errores,
+        estadisticas: {
+          operacionesIntentadas: operacionesTotales,
+          operacionesExitosas: 0,
+          errores: erroresTotales
+        }
+      });
+    }
+
+    // 🎉 COMMIT SI TODO ESTÁ BIEN O HAY ÉXITOS PARCIALES
+    await transaction.commit();
+
+    // 📊 OBTENER ESTADO FINAL CON NUEVA CONEXIÓN
+    const estadoFinalResult = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_sumaComponentes');
+
+    const sumaFinalReal = parseFloat(estadoFinalResult.recordset[0]?.suma_actual || estadoFinalResult.recordset[0]?.suma || 0);
+
+    // 🎯 RESPUESTA EXITOSA
+    const respuesta = {
+      mensaje: erroresTotales === 0 ? 
+        'Todos los componentes fueron guardados exitosamente' :
+        `${operacionesExitosas} operaciones exitosas, ${erroresTotales} con errores`,
+      
+      estadisticas: {
+        operacionesIntentadas: operacionesTotales,
+        operacionesExitosas,
+        errores: erroresTotales,
+        componentesCreados,
+        componentesModificados,
+        componentesEliminados
+      },
+
+      estadoFinal: {
+        sumaTotal: sumaFinalReal,
+        disponible: 10 - sumaFinalReal,
+        esCompleto: Math.abs(sumaFinalReal - 10) < 0.01,
+        esValido: sumaFinalReal <= 10
+      },
+
+      // Solo incluir errores si los hay
+      ...(erroresTotales > 0 && { errores }),
+
+      // 🎉 FELICITACIÓN SI TODO PERFECTO
+      ...(erroresTotales === 0 && Math.abs(sumaFinalReal - 10) < 0.01 && {
+        felicitacion: {
+          mensaje: '🎉 ¡Perfecto! Parcial configurado con exactamente 10 puntos',
+          tipo: 'exito_completo'
+        }
+      })
+    };
+
+    console.log(`✅ Guardado masivo completado:`);
+    console.log(`   📊 Creados: ${componentesCreados}`);
+    console.log(`   ✏️ Modificados: ${componentesModificados}`);
+    console.log(`   🗑️ Eliminados: ${componentesEliminados}`);
+    console.log(`   ❌ Errores: ${erroresTotales}`);
+    console.log(`   🎯 Suma final: ${sumaFinalReal} pts`);
+
+    res.json(respuesta);
+
+  } catch (error) {
+    // 🔥 MANEJO DE ERRORES MEJORADO
+    console.error('❌ Error crítico en guardado masivo:', error);
+    
+    if (transaction) {
+      try {
+        await transaction.rollback();
+        console.log('🔄 Rollback ejecutado correctamente');
+      } catch (rollbackError) {
+        console.error('❌ Error en rollback:', rollbackError);
+      }
+    }
+    
+    res.status(500).json({
+      error: 'Error crítico durante el guardado masivo',
+      detalle: error.message,
+      momento: 'Durante la transacción principal'
+    });
+  }
+};
+
+const validarOperacionesMasivas = async (req, res) => {
+  const { 
+    claveMateria, 
+    parcial, 
+    periodo, 
+    claveDocente, 
+    operaciones 
+  } = req.body;
+
+  let pool;
+
+  try {
+    // 🔥 CONECTAR AL POOL
+    pool = await sql.connect(config);
+
+    // 🔍 OBTENER ESTADO ACTUAL
+    const componentesActualesResult = await pool.request()
+      .input('claveMateria', sql.VarChar, claveMateria)
+      .input('parcial', sql.Int, parcial)
+      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('claveDocente', sql.VarChar, claveDocente)
+      .execute('sp_ObtenerComponentesMateria');
+
+    const componentesActuales = componentesActualesResult.recordset || [];
+
+    // 🧮 SIMULAR OPERACIONES
+    const operacionesCrear = operaciones.filter(op => op.tipo === 'crear');
+    const operacionesModificar = operaciones.filter(op => op.tipo === 'modificar');
+    const operacionesEliminar = operaciones.filter(op => op.tipo === 'eliminar');
+
+    let sumaSimulada = 0;
+    const advertencias = [];
+    const erroresPotenciales = [];
+
+    // Simular suma final
+    componentesActuales.forEach(comp => {
+      const seElimina = operacionesEliminar.some(op => op.id === comp.id_valor_componente);
+      const seModifica = operacionesModificar.find(op => op.id === comp.id_valor_componente);
+      
+      if (seElimina) {
+        // No sumar, se eliminará
+      } else if (seModifica) {
+        sumaSimulada += parseFloat(seModifica.valorComponente || 0);
+      } else {
+        sumaSimulada += parseFloat(comp.valor_componente || 0);
+      }
+    });
+
+    // Sumar nuevos componentes
+    operacionesCrear.forEach(op => {
+      sumaSimulada += parseFloat(op.valorComponente || 0);
+    });
+
+    // 🔍 VALIDACIONES ESPECÍFICAS
+    
+    // Verificar componentes a eliminar
+    for (const operacion of operacionesEliminar) {
+      try {
+        const vinculaciones = await pool.request()
+          .input('idComponente', sql.Int, operacion.id)
+          .execute('sp_VerificarActividadesConComponentes');
+
+        if (vinculaciones.recordset[0]?.cantidad > 0) {
+          erroresPotenciales.push({
+            tipo: 'eliminar_con_actividades',
+            id: operacion.id,
+            actividades: vinculaciones.recordset[0].cantidad,
+            mensaje: `El componente ID ${operacion.id} tiene ${vinculaciones.recordset[0].cantidad} actividades vinculadas`
+          });
+        }
+      } catch (error) {
+        console.error(`❌ Error validando componente ${operacion.id}:`, error);
+        erroresPotenciales.push({
+          tipo: 'error_validacion',
+          id: operacion.id,
+          mensaje: `Error al validar componente: ${error.message}`
+        });
+      }
+    }
+
+    // Verificar nombres duplicados
+    const todosLosNombres = [
+      ...operacionesCrear.map(op => op.nombreComponente),
+      ...operacionesModificar.map(op => op.nombreComponente),
+      ...componentesActuales
+        .filter(comp => 
+          !operacionesEliminar.some(op => op.id === comp.id_valor_componente) &&
+          !operacionesModificar.some(op => op.id === comp.id_valor_componente)
+        )
+        .map(comp => comp.nombre_componente)
+    ];
+
+    const nombresDuplicados = todosLosNombres.filter((nombre, index) => 
+      todosLosNombres.indexOf(nombre) !== index
+    );
+
+    if (nombresDuplicados.length > 0) {
+      advertencias.push({
+        tipo: 'nombres_duplicados',
+        nombres: [...new Set(nombresDuplicados)],
+        mensaje: 'Se detectaron nombres de componentes duplicados'
+      });
+    }
+
+    // 🎯 RESULTADO DE VALIDACIÓN
+    const validacion = {
+      esValida: erroresPotenciales.length === 0,
+      sumaFinal: parseFloat(sumaSimulada.toFixed(2)),
+      sumaPerfecta: Math.abs(sumaSimulada - 10) < 0.01,
+      diferencia: sumaSimulada - 10,
+      
+      operaciones: {
+        crear: operacionesCrear.length,
+        modificar: operacionesModificar.length,
+        eliminar: operacionesEliminar.length,
+        total: operaciones.length
+      },
+
+      erroresPotenciales,
+      advertencias,
+
+      recomendacion: 
+        Math.abs(sumaSimulada - 10) > 0.01 ? 
+          `Ajusta los valores para sumar exactamente 10 puntos (actualmente: ${sumaSimulada})` :
+        erroresPotenciales.length > 0 ?
+          'Corrige los errores antes de guardar' :
+          '✅ Listo para guardar'
+    };
+
+    res.json(validacion);
+
+  } catch (error) {
+    console.error('❌ Error al validar operaciones:', error);
+    res.status(500).json({
+      error: 'Error al validar operaciones',
+      detalle: error.message
+    });
+  }
+};
 // ===============================================
 // EXPORTS COMPLETOS ACTUALIZADOS Y CORREGIDOS
 // ===============================================
@@ -2897,6 +3259,8 @@ module.exports = {
   validarComplecionParcial,
   obtenerEstadisticasGeneralesDocente,
   clonarComponentesParcial,
+   guardarComponentesMasivo,
+  validarOperacionesMasivas,
   
   // Funciones de grupos y actividades
   obtenerGruposPorMateriaDocente,
