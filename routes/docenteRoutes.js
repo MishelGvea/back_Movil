@@ -25,6 +25,8 @@ const {
   validarParcial,
   obtenerEstadisticasGeneralesDocente,
   clonarComponentesParcial,
+  guardarComponentesMasivo,
+  validarOperacionesMasivas,
 
   // Grupos y actividades
   obtenerGruposPorMateriaDocente,
@@ -113,6 +115,13 @@ router.post('/componentes/clonar-parcial', clonarComponentesParcial);
 
 // Obtener componentes para dropdown en crear actividad
 router.get('/componentes/dropdown/:claveDocente/:claveMateria/:parcial/:periodo', obtenerComponentesParaDropdown);
+
+// 🔥 RUTA PRINCIPAL: Guardar todos los componentes de una vez
+router.post('/componentes/guardar-masivo', guardarComponentesMasivo);
+
+// 🔧 RUTA OPCIONAL: Validar operaciones antes de guardar
+router.post('/componentes/validar-operaciones', validarOperacionesMasivas);
+
 
 // =========================================
 // GRUPOS Y ACTIVIDADES
