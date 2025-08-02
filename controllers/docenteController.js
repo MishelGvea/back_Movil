@@ -2287,7 +2287,7 @@ const guardarCalificacionesAlumno = async (req, res) => {
       await transaction.request()
         .input('idActividadAlumno', sql.Int, idActividadAlumno)
         .input('idCriterio', sql.Int, cal.id_criterio)
-        .input('calificacion', sql.Float, cal.calificacion)
+        .input('calificacion', sql.Float, Math.max(0, cal.calificacion || 0))  // ← Misma validación
         .query(`
           INSERT INTO tbl_evaluacion_criterioActividad (
             id_actividad_alumno, id_criterio, calificacion
@@ -2386,7 +2386,7 @@ const guardarCalificacionesEquipo = async (req, res) => {
         .input('idEquipo', sql.Int, idEquipo)
         .input('idActividadEquipo', sql.Int, idActividadEquipo)
         .input('idCriterio', sql.Int, cal.id_criterio)
-        .input('calificacion', sql.Float, cal.calificacion)
+        .input('calificacion', sql.Float, Math.max(0, cal.calificacion || 0))  // ← Asegurar que no sea negativo
         .query(`
           INSERT INTO tbl_evaluacion_criterioActividadEquipo (
             id_equipo, id_actividad_equipo, id_criterio, calificacion
