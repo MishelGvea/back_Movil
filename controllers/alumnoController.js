@@ -1375,7 +1375,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
         periodosProcesados[actividad.periodo].materias[actividad.materia] = {
           nombre: actividad.materia,
           docente: actividad.Docente || 'Docente Asignado',
-          grupo: actividad.grupo || 'Grupo',
+          grupo: periodoInfo.grupo || 'Grupo no asignado',
           creditos: 5,
           estado: 'En curso',
           parciales: {
