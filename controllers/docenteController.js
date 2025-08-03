@@ -2261,8 +2261,7 @@ const obtenerCalificacionesEquipo = async (req, res) => {
 // 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON ACTUALIZACIÓN DE ESTADO
 // 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON OBSERVACIONES
 const guardarCalificacionesAlumno = async (req, res) => {
-  const { idActividadAlumno, calificaciones, observacion } = req.body; // 🆕 AGREGAR observacion
-  // calificaciones = [{ id_criterio: 1, calificacion: 2.0 }, ...]
+  const { idActividadAlumno, calificaciones, observacion } = req.body;
 
   const transaction = new sql.Transaction();
 
@@ -2271,50 +2270,39 @@ const guardarCalificacionesAlumno = async (req, res) => {
     await transaction.begin();
 
     console.log(`📝 Guardando calificaciones para alumno ID: ${idActividadAlumno}`);
-    console.log(`💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:`, observacion); // 🆕 DEBUG LOG
+    console.log(`💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:`, observacion);
     console.log(`📊 CALIFICACIONES:`, calificaciones);
 
-    // Eliminar calificaciones existentes
+    // PASO 1: Eliminar calificaciones existentes usando SP
     await transaction.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
-      .query(`
-        DELETE FROM tbl_evaluacion_criterioActividad 
-        WHERE id_actividad_alumno = @idActividadAlumno
-      `);
+      .execute('sp_EliminarCalificacionesAlumno');
 
-    // Insertar nuevas calificaciones
+    // PASO 2: Insertar nuevas calificaciones usando SP
     for (const cal of calificaciones) {
       await transaction.request()
         .input('idActividadAlumno', sql.Int, idActividadAlumno)
         .input('idCriterio', sql.Int, cal.id_criterio)
-        .input('calificacion', sql.Float, Math.max(0, cal.calificacion || 0))  // ← Misma validación
-        .query(`
-          INSERT INTO tbl_evaluacion_criterioActividad (
-            id_actividad_alumno, id_criterio, calificacion
-          ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
-        `);
+        .input('calificacion', sql.Float, cal.calificacion || 0)
+        .execute('sp_InsertarCalificacion');
     }
 
-    // 🆕 ACTUALIZAR ESTADO Y OBSERVACIÓN EN UNA SOLA QUERY
+    // PASO 3: Actualizar estado y observación usando SP
     await transaction.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
-      .input('observacion', sql.NVarChar, observacion || null) // 🆕 OBSERVACIÓN
-      .query(`
-        UPDATE tbl_actividad_alumno 
-        SET id_estado = @nuevoEstado, observacion = @observacion 
-        WHERE id_actividad_alumno = @idActividadAlumno
-      `);
+      .input('observacion', sql.NVarChar, observacion || null)
+      .execute('sp_ActualizarEstadoYObservacion');
 
     await transaction.commit();
     
     console.log(`✅ Calificaciones guardadas y estado actualizado a "Entregado"`);
-    console.log(`💬 Observación final guardada: "${observacion}"`); // 🆕 CONFIRMACIÓN LOG
+    console.log(`💬 Observación final guardada: "${observacion}"`);
     
     res.json({ 
       mensaje: 'Calificaciones y observación guardadas correctamente',
       estadoActualizado: 'Entregado',
-      observacionGuardada: observacion // 🆕 RESPUESTA CON CONFIRMACIÓN
+      observacionGuardada: observacion
     });
 
   } catch (error) {
@@ -2325,7 +2313,6 @@ const guardarCalificacionesAlumno = async (req, res) => {
 };
 
 const guardarCalificacionesEquipo = async (req, res) => {
-  // 🔧 CORREGIDO: Recibir integrantesPersonalizados
   const { idActividadEquipo, idEquipo, calificaciones, observacion, integrantesPersonalizados } = req.body;
 
   const transaction = new sql.Transaction();
@@ -2339,24 +2326,17 @@ const guardarCalificacionesEquipo = async (req, res) => {
     console.log('👥 idEquipo:', idEquipo);
     console.log('📊 Calificaciones:', calificaciones);
     console.log('💬 Observación:', observacion);
-    console.log('🎯 Integrantes personalizados:', integrantesPersonalizados); // 🆕 DEBUG
+    console.log('🎯 Integrantes personalizados:', integrantesPersonalizados);
 
-    // PASO 1: Eliminar calificaciones existentes del equipo
+    // PASO 1: Eliminar calificaciones existentes del equipo usando SP
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        DELETE FROM tbl_evaluacion_criterioActividadEquipo 
-        WHERE id_actividad_equipo = @idActividadEquipo
-      `);
+      .execute('sp_EliminarCalificacionesEquipo');
 
-    // PASO 2: Obtener todos los integrantes del equipo
+    // PASO 2: Obtener todos los integrantes del equipo usando SP
     const integrantesResult = await transaction.request()
       .input('idEquipo', sql.Int, idEquipo)
-      .query(`
-        SELECT ea.vchMatricula
-        FROM tbl_equipo_alumno ea
-        WHERE ea.id_equipo = @idEquipo
-      `);
+      .execute('sp_ObtenerIntegrantesEquipo');
 
     const integrantes = integrantesResult.recordset;
     console.log(`👥 Integrantes del equipo: ${integrantes.length}`);
@@ -2365,14 +2345,10 @@ const guardarCalificacionesEquipo = async (req, res) => {
       throw new Error('No se encontraron integrantes en el equipo');
     }
 
-    // PASO 3: Obtener la actividad para verificar modalidad
+    // PASO 3: Obtener la actividad para verificar modalidad usando SP
     const actividadResult = await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .query(`
-        SELECT ae.id_actividad
-        FROM tbl_actividad_equipo ae
-        WHERE ae.id_actividad_equipo = @idActividadEquipo
-      `);
+      .execute('sp_ObtenerIdActividadEquipo');
 
     if (actividadResult.recordset.length === 0) {
       throw new Error('Actividad equipo no encontrada');
@@ -2380,32 +2356,24 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
     const idActividad = actividadResult.recordset[0].id_actividad;
 
-    // PASO 4: Insertar nuevas calificaciones en tabla de equipos
+    // PASO 4: Insertar nuevas calificaciones en tabla de equipos usando SP
     for (const cal of calificaciones) {
       await transaction.request()
         .input('idEquipo', sql.Int, idEquipo)
         .input('idActividadEquipo', sql.Int, idActividadEquipo)
         .input('idCriterio', sql.Int, cal.id_criterio)
-        .input('calificacion', sql.Float, Math.max(0, cal.calificacion || 0))  // ← Asegurar que no sea negativo
-        .query(`
-          INSERT INTO tbl_evaluacion_criterioActividadEquipo (
-            id_equipo, id_actividad_equipo, id_criterio, calificacion
-          ) VALUES (@idEquipo, @idActividadEquipo, @idCriterio, @calificacion)
-        `);
+        .input('calificacion', sql.Float, cal.calificacion || 0)
+        .execute('sp_InsertarCalificacionEquipo');
     }
 
-    // PASO 5: Actualizar estado y observación del equipo
+    // PASO 5: Actualizar estado y observación del equipo usando SP
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
       .input('observacion', sql.NVarChar, observacion || null)
-      .query(`
-        UPDATE tbl_actividad_equipo 
-        SET id_estado = @nuevoEstado, observacion = @observacion 
-        WHERE id_actividad_equipo = @idActividadEquipo
-      `);
+      .execute('sp_ActualizarEstadoYObservacionEquipo');
 
-    // 🔧 PASO 6.5: MAPEAR MATRÍCULAS TEMPORALES A REALES
+    // PASO 6: MAPEAR MATRÍCULAS TEMPORALES A REALES
     console.log('🔧 Mapeando matrículas temporales a reales...');
     const integrantesPersonalizadosConMatriculasReales = [];
 
@@ -2415,7 +2383,7 @@ const guardarCalificacionesEquipo = async (req, res) => {
         const integrantePersonalizado = integrantesPersonalizados[i];
         
         integrantesPersonalizadosConMatriculasReales.push({
-          vchMatricula: integranteReal.vchMatricula, // ← USAR MATRÍCULA REAL
+          vchMatricula: integranteReal.vchMatricula,
           tieneCalificacionPersonalizada: integrantePersonalizado.tieneCalificacionPersonalizada || false,
           observacionesPersonalizadas: integrantePersonalizado.observacionesPersonalizadas || '',
           criteriosPersonalizados: integrantePersonalizado.criteriosPersonalizados || {}
@@ -2427,11 +2395,11 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
     console.log('✅ Mapeo completado:', integrantesPersonalizadosConMatriculasReales);
 
-    // 🔧 PASO 6 CORREGIDO: PROCESAR CALIFICACIONES INDIVIDUALES O GRUPALES
+    // PASO 7: PROCESAR CALIFICACIONES INDIVIDUALES O GRUPALES
     for (const integrante of integrantes) {
       console.log(`📝 Procesando calificaciones para ${integrante.vchMatricula}`);
 
-      // 🎯 BUSCAR SI ESTE INTEGRANTE TIENE CALIFICACIONES PERSONALIZADAS (CORREGIDO)
+      // Buscar si este integrante tiene calificaciones personalizadas
       const integrantePersonalizado = integrantesPersonalizadosConMatriculasReales?.find(
         ip => ip.vchMatricula === integrante.vchMatricula
       );
@@ -2441,70 +2409,52 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
       console.log(`🎯 ${integrante.vchMatricula} - Personalizada: ${tieneCalificacionPersonalizada}`);
 
-      // Verificar si existe registro en tbl_actividad_alumno
+      // Verificar si existe registro en tbl_actividad_alumno usando SP
       const actividadAlumnoResult = await transaction.request()
         .input('idActividad', sql.Int, idActividad)
         .input('matricula', sql.VarChar, integrante.vchMatricula)
-        .query(`
-          SELECT id_actividad_alumno
-          FROM tbl_actividad_alumno
-          WHERE id_actividad = @idActividad AND vchMatricula = @matricula
-        `);
+        .execute('sp_VerificarActividadAlumno');
 
       let idActividadAlumno;
 
       if (actividadAlumnoResult.recordset.length === 0) {
-        // Crear registro
+        // Crear registro usando SP
         await transaction.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
           .input('estadoInicial', sql.Int, 2) // 2 = Entregado
           .input('observacion', sql.NVarChar, observacionPersonalizada || null)
-          .query(`
-            INSERT INTO tbl_actividad_alumno (id_actividad, vchMatricula, id_estado, observacion)
-            VALUES (@idActividad, @matricula, @estadoInicial, @observacion)
-          `);
+          .execute('sp_CrearActividadAlumno');
         
-        // Obtener el ID insertado
+        // Obtener el ID insertado usando SP
         const nuevoIdResult = await transaction.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
-          .query(`
-            SELECT id_actividad_alumno
-            FROM tbl_actividad_alumno
-            WHERE id_actividad = @idActividad AND vchMatricula = @matricula
-          `);
+          .execute('sp_ObtenerIdActividadAlumno');
         
         idActividadAlumno = nuevoIdResult.recordset[0].id_actividad_alumno;
         console.log(`✅ Creado tbl_actividad_alumno para ${integrante.vchMatricula}: ${idActividadAlumno}`);
       } else {
         idActividadAlumno = actividadAlumnoResult.recordset[0].id_actividad_alumno;
         
-        // Actualizar estado y observación
+        // Actualizar estado y observación usando SP
         await transaction.request()
           .input('idActividadAlumno', sql.Int, idActividadAlumno)
           .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
           .input('observacion', sql.NVarChar, observacionPersonalizada || null)
-          .query(`
-            UPDATE tbl_actividad_alumno 
-            SET id_estado = @nuevoEstado, observacion = @observacion 
-            WHERE id_actividad_alumno = @idActividadAlumno
-          `);
+          .execute('sp_ActualizarEstadoObservacionAlumno');
         
         console.log(`✅ Actualizando tbl_actividad_alumno existente: ${idActividadAlumno}`);
       }
 
-      // Eliminar calificaciones individuales existentes para este alumno
+      // Eliminar calificaciones individuales existentes para este alumno usando SP
       await transaction.request()
         .input('idActividadAlumno', sql.Int, idActividadAlumno)
-        .query(`
-          DELETE FROM tbl_evaluacion_criterioActividad 
-          WHERE id_actividad_alumno = @idActividadAlumno
-        `);
+        .execute('sp_EliminarCalificacionesIndividualesAlumno');
 
-      // 🔧 INSERTAR CALIFICACIONES: PERSONALIZADAS O DEL EQUIPO
+      // INSERTAR CALIFICACIONES: PERSONALIZADAS O DEL EQUIPO
       if (tieneCalificacionPersonalizada && integrantePersonalizado.criteriosPersonalizados) {
-        // 🎯 USAR CALIFICACIONES PERSONALIZADAS
+        // USAR CALIFICACIONES PERSONALIZADAS
         console.log(`🌟 Aplicando calificaciones PERSONALIZADAS para ${integrante.vchMatricula}`);
         
         for (const [idCriterio, calificacionPersonalizada] of Object.entries(integrantePersonalizado.criteriosPersonalizados)) {
@@ -2512,16 +2462,12 @@ const guardarCalificacionesEquipo = async (req, res) => {
             .input('idActividadAlumno', sql.Int, idActividadAlumno)
             .input('idCriterio', sql.Int, parseInt(idCriterio))
             .input('calificacion', sql.Float, calificacionPersonalizada)
-            .query(`
-              INSERT INTO tbl_evaluacion_criterioActividad (
-                id_actividad_alumno, id_criterio, calificacion
-              ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
-            `);
+            .execute('sp_InsertarCalificacion');
           
           console.log(`   ✅ Criterio ${idCriterio}: ${calificacionPersonalizada} puntos`);
         }
       } else {
-        // 📊 USAR CALIFICACIONES DEL EQUIPO (COMPORTAMIENTO ANTERIOR)
+        // USAR CALIFICACIONES DEL EQUIPO
         console.log(`📊 Aplicando calificaciones del EQUIPO para ${integrante.vchMatricula}`);
         
         for (const cal of calificaciones) {
@@ -2529,18 +2475,14 @@ const guardarCalificacionesEquipo = async (req, res) => {
             .input('idActividadAlumno', sql.Int, idActividadAlumno)
             .input('idCriterio', sql.Int, cal.id_criterio)
             .input('calificacion', sql.Float, cal.calificacion)
-            .query(`
-              INSERT INTO tbl_evaluacion_criterioActividad (
-                id_actividad_alumno, id_criterio, calificacion
-              ) VALUES (@idActividadAlumno, @idCriterio, @calificacion)
-            `);
+            .execute('sp_InsertarCalificacion');
         }
       }
     }
 
     await transaction.commit();
     
-    // 🎯 ESTADÍSTICAS FINALES
+    // ESTADÍSTICAS FINALES
     const integrantesPersonalizadosCount = integrantesPersonalizadosConMatriculasReales?.filter(ip => ip.tieneCalificacionPersonalizada).length || 0;
     const integrantesGeneralesCount = integrantes.length - integrantesPersonalizadosCount;
     
@@ -2556,7 +2498,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
       criterios_calificados: calificaciones.length,
       estadoActualizado: 'Entregado',
       observacionGuardada: observacion,
-      // 🆕 ESTADÍSTICAS DETALLADAS
       calificacionesIndividuales: {
         personalizadas: integrantesPersonalizadosCount,
         generales: integrantesGeneralesCount,
