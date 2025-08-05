@@ -1,11 +1,5 @@
 const { sql, config } = require('../db/sqlConfig');
 
-
-
-// ===============================================
-// FUNCIONES EXISTENTES (SIN MODIFICAR)
-// ===============================================
-// Obtener datos del docente
 const obtenerDatosDocente = async (req, res) => {
   const { clave } = req.params;
 
@@ -13,7 +7,7 @@ const obtenerDatosDocente = async (req, res) => {
     const pool = await sql.connect(config);
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
-      .execute('sp_ObtenerDatosDocente'); // ← Ejecutar el procedimiento
+      .execute('sp_ObtenerDatosDocente');
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ mensaje: 'Docente no encontrado' });
@@ -26,7 +20,6 @@ const obtenerDatosDocente = async (req, res) => {
   }
 };
 
-// Obtener perfil completo del docente con materias
 const obtenerPerfilDocente = async (req, res) => {
   const { clave } = req.body;
 
@@ -47,7 +40,6 @@ const obtenerPerfilDocente = async (req, res) => {
   }
 };
 
-// Obtener materias asignadas al docente (sin filtro de periodo)
 const obtenerMateriasPorDocente = async (req, res) => {
   const { clave } = req.params;
 
@@ -64,14 +56,12 @@ const obtenerMateriasPorDocente = async (req, res) => {
   }
 };
 
-// 🆕 FUNCIÓN PRINCIPAL: Obtener materias completas del PERIODO ACTUAL
 const obtenerMateriasCompletas = async (req, res) => {
   const { clave } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // Obtener el periodo más reciente (actual) desde la base de datos
     const periodoActualResult = await pool.request().execute(`sp_ObtenerPeriodoActual`);
     
     if (periodoActualResult.recordset.length === 0) {
@@ -88,7 +78,6 @@ const obtenerMateriasCompletas = async (req, res) => {
 
     console.log(`✅ Encontradas ${result.recordset.length} materias del periodo actual (${periodoActual})`);
     
-    // Agregar información del periodo para debugging
     const responseData = result.recordset.map(materia => ({
       ...materia,
       periodoInfo: `${periodoActual} - Cuatrimestre ${materia.vchCuatrimestre}`
@@ -102,12 +91,10 @@ const obtenerMateriasCompletas = async (req, res) => {
   }
 };
 
-// 🆕 FUNCIÓN AUXILIAR: Obtener información del periodo actual
 const obtenerPeriodoActualInterno = async () => {
   try {
     const pool = await sql.connect(config);
     
-    // Obtener el periodo más reciente usando tu SP existente
     const periodoResult = await pool.request().query(`EXEC sp_ObtenerPeriodoActual;`);
     
     if (periodoResult.recordset.length === 0) {
@@ -126,13 +113,7 @@ const obtenerPeriodoActualInterno = async () => {
   }
 };
 
-/**
- * Validar y obtener periodo correcto (con fallback)
- * @param {string} periodoRecibido - Periodo recibido del frontend
- * @returns {Promise<string>} Periodo validado
- */
 const validarPeriodo = async (periodoRecibido) => {
-  // Si se envía 'auto' o no se envía periodo, obtener de BD
   if (!periodoRecibido || 
       periodoRecibido === 'auto' || 
       periodoRecibido === 'null' || 
@@ -145,34 +126,26 @@ const validarPeriodo = async (periodoRecibido) => {
     }
   }
 
-  // Si se envía un periodo específico, validarlo
   if (periodoRecibido && periodoRecibido.length === 5) {
     const año = parseInt(periodoRecibido.substring(0, 4));
     const cuatrimestre = parseInt(periodoRecibido.substring(4));
     const añoActual = new Date().getFullYear();
     
-    // Validar rango razonable
     if (año >= 2020 && año <= añoActual + 2 && [1, 2, 3].includes(cuatrimestre)) {
       console.log(`✅ Usando periodo específico validado: ${periodoRecibido}`);
       return periodoRecibido;
     }
   }
 
-  // Fallback: obtener de BD
   console.log(`⚠️ Periodo inválido: ${periodoRecibido}, obteniendo de BD...`);
   const periodoBD = await obtenerPeriodoActualInterno();
-  return periodoBD || '20252'; // Último fallback
+  return periodoBD || '20252';
 };
 
-/**
- * Endpoint para obtener información completa del periodo actual
- * Tu función original mejorada
- */
 const obtenerPeriodoActual = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // Obtener el periodo más reciente
     const periodoResult = await pool.request().query(`EXEC sp_ObtenerPeriodoActual;`);
     
     if (periodoResult.recordset.length === 0) {
@@ -181,11 +154,9 @@ const obtenerPeriodoActual = async (req, res) => {
 
     const periodoActual = periodoResult.recordset[0].Periodo.toString();
     
-    // Extraer año y cuatrimestre del periodo
     const año = periodoActual.substring(0, 4);
     const cuatrimestreNumero = periodoActual.substring(4, 5);
     
-    // Obtener información del cuatrimestre desde tbl_periodos
     const cuatrimestreInfo = await pool.request()
       .input('idPeriodo', sql.Int, parseInt(cuatrimestreNumero))
       .query(`EXEC sp_CuatrimestreInfo`);
@@ -195,7 +166,6 @@ const obtenerPeriodoActual = async (req, res) => {
       año,
       cuatrimestreNumero,
       descripcion: `Año ${año}, Cuatrimestre ${cuatrimestreNumero}`,
-      // 🆕 Información adicional útil
       esPeriodoAutomatico: true,
       fechaConsulta: new Date().toISOString(),
       ...(cuatrimestreInfo.recordset.length > 0 && {
@@ -213,9 +183,6 @@ const obtenerPeriodoActual = async (req, res) => {
   }
 };
 
-// Obtener grupos que atiende el docente en una materia
-// En tu docenteController.js, modifica obtenerGruposPorMateriaDocente:
-
 const obtenerGruposPorMateriaDocente = async (req, res) => {
   const { clave, clvMateria } = req.params;
 
@@ -232,20 +199,13 @@ const obtenerGruposPorMateriaDocente = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-// ===============================================
-// 🆕 FUNCIONES CRUD PARA GESTIÓN DE COMPONENTES
-// ===============================================
 
-
-// Obtener todos los componentes de un docente/materia/parcial/periodo
 const obtenerComponentesPorMateria = async (req, res) => {
   const { claveDocente, claveMateria, parcial, periodo } = req.params;
   
   try {
-    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
     
-    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
     let periodoReal = periodo;
     if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
       console.log('🔄 Resolviendo periodo automático...');
@@ -259,29 +219,25 @@ const obtenerComponentesPorMateria = async (req, res) => {
       console.log(`✅ Periodo resuelto: ${periodoReal}`);
     }
     
-    // 🔥 LLAMAR A TU SP REAL CON PERIODO REAL
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodoReal)  // 👈 USAR PERIODO REAL
+      .input('vchPeriodo', sql.VarChar, periodoReal)
       .input('claveDocente', sql.VarChar, claveDocente)
-      .execute('sp_ObtenerComponentesMateria');  // 👈 Tu SP real
+      .execute('sp_ObtenerComponentesMateria');
     
     const componentes = result.recordset || [];
     
-    // 🔥 MAPEAR TUS COLUMNAS A LAS QUE ESPERA EL FRONTEND
     const componentesMapeados = componentes.map(comp => ({
       id_valor_componente: comp.id_valor_componente,
-      nombre_componente: comp.nombre_componente,  // Ya viene como nombre_componente según tu SP
+      nombre_componente: comp.nombre_componente,
       valor_componente: comp.valor_componente,
-      id_componente: comp.id_valor_componente  // Usar el mismo ID como referencia
+      id_componente: comp.id_valor_componente
     }));
     
-    // 🔥 CALCULAR ESTADÍSTICAS MEJORADAS
     const sumaTotal = componentesMapeados.reduce((suma, comp) => suma + parseFloat(comp.valor_componente || 0), 0);
     const disponible = 10 - sumaTotal;
     
-    // 🔥 VALIDACIÓN AVANZADA
     const validacion = {
       esValido: sumaTotal <= 10,
       esCompleto: sumaTotal === 10,
@@ -290,7 +246,6 @@ const obtenerComponentesPorMateria = async (req, res) => {
       progreso: (sumaTotal / 10 * 100).toFixed(1)
     };
 
-    // 🔥 ESTADÍSTICAS ADICIONALES
     let estadisticas = null;
     if (componentesMapeados.length > 0) {
       const valores = componentesMapeados.map(c => parseFloat(c.valor_componente || 0));
@@ -302,14 +257,13 @@ const obtenerComponentesPorMateria = async (req, res) => {
       };
     }
 
-    // 🔥 RESPUESTA MEJORADA
     res.json({
       componentes: componentesMapeados || [],
       sumaTotal: parseFloat(sumaTotal.toFixed(2)),
       disponible: parseFloat(disponible.toFixed(2)),
       validacion,
       estadisticas,
-      periodoUsado: periodoReal, // 👈 INCLUIR PARA DEBUG
+      periodoUsado: periodoReal,
       debug: {
         periodoOriginal: periodo,
         periodoResuelto: periodoReal,
@@ -317,7 +271,6 @@ const obtenerComponentesPorMateria = async (req, res) => {
       }
     });
 
-    // Cerrar conexión
     await pool.close();
 
   } catch (error) {
@@ -337,7 +290,6 @@ const crearComponente = async (req, res) => {
   const { claveMateria, parcial, periodo, claveDocente, nombreComponente, valorComponente } = req.body;
   
   try {
-    // 🔥 VALIDACIÓN PREVIA
     if (!valorComponente || valorComponente <= 0 || valorComponente > 10) {
       return res.status(400).json({
         error: 'El valor del componente debe estar entre 0.1 y 10 puntos',
@@ -348,7 +300,6 @@ const crearComponente = async (req, res) => {
 
     const pool = await sql.connect(config);
 
-    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
     let periodoReal = periodo;
     if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
       console.log('🔄 Resolviendo periodo automático...');
@@ -362,18 +313,16 @@ const crearComponente = async (req, res) => {
       console.log(`✅ Periodo resuelto: ${periodoReal}`);
     }
 
-    // 🔥 OBTENER SUMA ACTUAL - MANEJO SEGURO
     console.log('🔍 Obteniendo suma actual...');
     const sumResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
+      .input('vchPeriodo', sql.VarChar, periodoReal)
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_sumaComponentes');
     
     console.log('📊 Resultado SP:', sumResult);
     
-    // 🔥 MANEJO SEGURO DEL RESULTADO
     let sumaActual = 0;
     if (sumResult.recordset && sumResult.recordset.length > 0) {
       const record = sumResult.recordset[0];
@@ -385,7 +334,6 @@ const crearComponente = async (req, res) => {
     const nuevaSuma = sumaActual + parseFloat(valorComponente);
     const disponible = 10 - sumaActual;
 
-    // 🔥 VALIDACIÓN: No exceder 10 puntos
     if (nuevaSuma > 10) {
       return res.status(400).json({
         error: `No se puede exceder los 10 puntos del parcial`,
@@ -400,7 +348,6 @@ const crearComponente = async (req, res) => {
       });
     }
 
-    // 🔥 AUTO-AJUSTE
     let valorFinal = parseFloat(valorComponente);
     let seAutoAjusto = false;
     
@@ -409,22 +356,19 @@ const crearComponente = async (req, res) => {
       seAutoAjusto = true;
     }
 
-    // 🔥 CREAR COMPONENTE CON PERIODO REAL
     console.log('📝 Creando componente...');
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
+      .input('vchPeriodo', sql.VarChar, periodoReal)
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('nombreComponente', sql.VarChar, nombreComponente)
       .input('valorComponente', sql.Decimal(5,2), valorFinal)
       .execute('sp_InsertarComponenteEvaluacion');
 
-    // 🔥 ESTADÍSTICAS
     const nuevaSumaFinal = sumaActual + valorFinal;
     const nuevoDisponible = 10 - nuevaSumaFinal;
     
-    // 🔥 RESPUESTA INTELIGENTE
     let recomendacion = null;
     let felicitacion = null;
     
@@ -445,7 +389,7 @@ const crearComponente = async (req, res) => {
         ? `Componente creado y auto-ajustado a ${valorFinal} puntos` 
         : 'Componente creado exitosamente',
       id_componente: result.recordset?.[0]?.id_componente || 'creado',
-      periodoUsado: periodoReal, // 👈 INCLUIR EN RESPUESTA PARA DEBUG
+      periodoUsado: periodoReal,
       estadisticas: {
         valorAsignado: valorFinal,
         sumaNueva: nuevaSumaFinal,
@@ -470,9 +414,6 @@ const crearComponente = async (req, res) => {
   }
 };
 
-
-// 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
-// ========================================
 const validarParcial = async (req, res) => {
   const { claveDocente, claveMateria, parcial, periodo } = req.params;
   
@@ -481,7 +422,6 @@ const validarParcial = async (req, res) => {
 
     console.log('🔍 Validando parcial...');
     
-    // 🔥 OBTENER COMPONENTES DIRECTAMENTE (más seguro)
     const componentesResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
@@ -494,7 +434,6 @@ const validarParcial = async (req, res) => {
     const disponible = 10 - sumaTotal;
     const cantidadComponentes = componentes.length;
 
-    // 🔥 RECOMENDACIONES INTELIGENTES
     const recomendaciones = [];
 
     if (sumaTotal === 10) {
@@ -562,13 +501,12 @@ const validarParcial = async (req, res) => {
     });
   }
 };
-// Modificar un componente existente
+
 const modificarComponente = async (req, res) => {
   const { idComponente } = req.params;
   const { nombreComponente, valorComponente } = req.body;
   
   try {
-    // 🔥 VALIDACIÓN DE VALOR
     if (!valorComponente || valorComponente <= 0 || valorComponente > 10) {
       return res.status(400).json({
         error: 'El valor del componente debe estar entre 0.1 y 10 puntos',
@@ -577,17 +515,11 @@ const modificarComponente = async (req, res) => {
       });
     }
 
-    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
 
-    // 🔥 OBTENER INFO DEL COMPONENTE ACTUAL (con consulta directa ya que no veo SP específico)
-    const componenteInfo = await pool.request()
-      .input('idComponente', sql.Int, idComponente)
-      .query(`
-        SELECT *
-        FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
+  const componenteInfo = await pool.request()
+  .input('idComponente', sql.Int, idComponente)
+  .execute('sp_ObtenerComponentePorId_movil');
     
     if (!componenteInfo.recordset || componenteInfo.recordset.length === 0) {
       await pool.close();
@@ -599,11 +531,10 @@ const modificarComponente = async (req, res) => {
     const componente = componenteInfo.recordset[0];
     const valorAnterior = parseFloat(componente.valor_componente);
 
-    // 🔥 OBTENER SUMA ACTUAL DEL PARCIAL CON TU SP
     const sumResult = await pool.request()
       .input('claveMateria', sql.VarChar, componente.vchClvMateria)
       .input('parcial', sql.Int, componente.parcial)
-      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)  // 👈 Cambio aquí
+      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)
       .input('claveDocente', sql.VarChar, componente.vchClvTrabajador)
       .execute('sp_sumaComponentes');
     
@@ -612,7 +543,6 @@ const modificarComponente = async (req, res) => {
     const nuevaSuma = sumaSinEsteComponente + parseFloat(valorComponente);
     const disponibleSinEste = 10 - sumaSinEsteComponente;
 
-    // 🔥 VALIDACIÓN: No exceder 10 puntos
     if (nuevaSuma > 10) {
       await pool.close();
       return res.status(400).json({
@@ -629,7 +559,6 @@ const modificarComponente = async (req, res) => {
       });
     }
 
-    // 🔥 AUTO-AJUSTE SI ESTÁ MUY CERCA
     let valorFinal = parseFloat(valorComponente);
     let seAutoAjusto = false;
     
@@ -638,18 +567,15 @@ const modificarComponente = async (req, res) => {
       seAutoAjusto = true;
     }
 
-    // 🔥 MODIFICAR EL COMPONENTE CON TU SP
     await pool.request()
       .input('idComponente', sql.Int, idComponente)
       .input('nombreComponente', sql.VarChar, nombreComponente)
       .input('valorComponente', sql.Decimal(5,2), valorFinal)
       .execute('sp_ActualizarComponente');
 
-    // 🔥 ESTADÍSTICAS POST-MODIFICACIÓN
     const nuevaSumaFinal = sumaSinEsteComponente + valorFinal;
     const nuevoDisponible = 10 - nuevaSumaFinal;
 
-    // 🔥 RESPUESTA INTELIGENTE
     let recomendacion = null;
     let felicitacion = null;
     
@@ -694,21 +620,16 @@ const modificarComponente = async (req, res) => {
     });
   }
 };
+
 const eliminarComponente = async (req, res) => {
   const { idComponente } = req.params;
   
   try {
-    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
 
-    // 🔥 OBTENER INFO DEL COMPONENTE ANTES DE ELIMINAR
-    const componenteInfo = await pool.request()
-      .input('idComponente', sql.Int, idComponente)
-      .query(`
-        SELECT *
-        FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
+const componenteInfo = await pool.request()
+  .input('idComponente', sql.Int, idComponente)
+  .execute('sp_ObtenerComponentePorId_movil')
     
     if (!componenteInfo.recordset || componenteInfo.recordset.length === 0) {
       await pool.close();
@@ -720,18 +641,11 @@ const eliminarComponente = async (req, res) => {
     const componente = componenteInfo.recordset[0];
     const valorLiberado = parseFloat(componente?.valor_componente || 0);
 
-    // 🔥 VERIFICAR ACTIVIDADES VINCULADAS A ESTE COMPONENTE ESPECÍFICO
     console.log('🔍 Verificando actividades vinculadas al componente específico...');
     
     const actividadesVinculadas = await pool.request()
-      .input('idComponente', sql.Int, idComponente)
-      .query(`
-        SELECT 
-          COUNT(*) as cantidad,
-          STRING_AGG(a.titulo, ', ') as nombres_actividades
-        FROM tbl_actividades a
-        WHERE a.id_valor_componente = @idComponente
-      `);
+  .input('idComponente', sql.Int, idComponente)
+  .execute('sp_VerificarActividadesVinculadasComponente_movil');
 
     const cantidadActividades = actividadesVinculadas.recordset[0]?.cantidad || 0;
     const nombresActividades = actividadesVinculadas.recordset[0]?.nombres_actividades || '';
@@ -754,12 +668,10 @@ const eliminarComponente = async (req, res) => {
 
     console.log('✅ El componente no tiene actividades vinculadas, procediendo a eliminar...');
 
-    // 🔥 ELIMINAR EL COMPONENTE CON TU SP
     const result = await pool.request()
       .input('idComponente', sql.Int, idComponente)
       .execute('sp_EliminarComponenteEvaluacion');
 
-    // 🔥 CALCULAR NUEVA SUMA CON TU SP
     const nuevaSumaResult = await pool.request()
       .input('claveMateria', sql.VarChar, componente.vchClvMateria)
       .input('parcial', sql.Int, componente.parcial)
@@ -794,6 +706,7 @@ const eliminarComponente = async (req, res) => {
     });
   }
 };
+
 const validarComplecionParcial = async (req, res) => {
   const { claveMateria, parcial, periodo, claveDocente } = req.params;
 
@@ -810,7 +723,6 @@ const validarComplecionParcial = async (req, res) => {
     const datos = result.recordset[0];
     const sumaTotal = parseFloat(datos.sumaTotal.toFixed(2));
 
-    // Verificar actividades que usan estos componentes
     const actividadesResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parseInt(parcial))
@@ -820,22 +732,21 @@ const validarComplecionParcial = async (req, res) => {
 
     const totalActividades = actividadesResult.recordset[0].totalActividades;
 
-    // 🎯 ANÁLISIS COMPLETO DE VALIDACIÓN
     const analisis = {
       parcial: parseInt(parcial),
       estadisticas: {
         totalComponentes: datos.totalComponentes,
         sumaTotal,
-        disponible: parseFloat((100 - sumaTotal).toFixed(2)),
+        disponible: parseFloat((10 - sumaTotal).toFixed(2)), 
         menorValor: datos.menorValor || 0,
         mayorValor: datos.mayorValor || 0,
         promedioValor: datos.totalComponentes > 0 ? parseFloat(datos.promedioValor.toFixed(2)) : 0
       },
       validacion: {
-        esValido: sumaTotal <= 100,
-        esCompleto: sumaTotal === 100,
-        exceso: sumaTotal > 100 ? parseFloat((sumaTotal - 100).toFixed(2)) : 0,
-        faltante: sumaTotal < 100 ? parseFloat((100 - sumaTotal).toFixed(2)) : 0
+        esValido: sumaTotal <= 10,        
+        esCompleto: sumaTotal === 10,    
+        exceso: sumaTotal > 10 ? parseFloat((sumaTotal - 10).toFixed(2)) : 0,      
+        faltante: sumaTotal < 10 ? parseFloat((10 - sumaTotal).toFixed(2)) : 0     
       },
       actividades: {
         total: totalActividades,
@@ -844,7 +755,6 @@ const validarComplecionParcial = async (req, res) => {
       estado: getEstadoParcial(sumaTotal, datos.totalComponentes, totalActividades)
     };
 
-    // 🔮 RECOMENDACIONES PERSONALIZADAS
     analisis.recomendaciones = generarRecomendaciones(analisis);
 
     res.json(analisis);
@@ -855,23 +765,21 @@ const validarComplecionParcial = async (req, res) => {
   }
 };
 
-// 🧠 FUNCIÓN AUXILIAR: Determinar estado del parcial
 function getEstadoParcial(suma, componentes, actividades) {
-  if (suma === 100 && componentes > 0) {
+  if (suma === 10 && componentes > 0) {           
     return actividades > 0 ? 'completo_con_actividades' : 'completo_sin_actividades';
-  } else if (suma > 100) {
+  } else if (suma > 10) {                         
     return 'excedido';
   } else if (suma === 0) {
     return 'vacio';
-  } else if (suma < 50) {
+  } else if (suma < 5) {                         
     return 'muy_incompleto';
-  } else if (suma < 100) {
+  } else if (suma < 10) {                         
     return 'incompleto';
   }
   return 'indefinido';
 }
 
-// 🎯 FUNCIÓN AUXILIAR: Generar recomendaciones inteligentes
 function generarRecomendaciones(analisis) {
   const { estadisticas, validacion, actividades, estado } = analisis;
   const recomendaciones = [];
@@ -883,7 +791,7 @@ function generarRecomendaciones(analisis) {
         icono: '🚨',
         titulo: 'Parcial sin componentes',
         mensaje: 'Este parcial no tiene componentes de evaluación',
-        acciones: ['Agrega al menos 2-3 componentes básicos', 'Sugerencia: Actividades (40%), Examen (60%)']
+        acciones: ['Agrega al menos 2-3 componentes básicos', 'Sugerencia: Actividades (4 pts), Examen (6 pts)'] 
       });
       break;
 
@@ -892,9 +800,9 @@ function generarRecomendaciones(analisis) {
         tipo: 'advertencia',
         icono: '⚠️',
         titulo: 'Ponderación muy baja',
-        mensaje: `Solo tienes ${estadisticas.sumaTotal}% asignado`,
+        mensaje: `Solo tienes ${estadisticas.sumaTotal} puntos asignados`, 
         acciones: [
-          `Faltan ${validacion.faltante}% por asignar`,
+          `Faltan ${validacion.faltante} puntos por asignar`,              
           'Considera agregar componentes importantes como Examen o Proyecto'
         ]
       });
@@ -905,9 +813,9 @@ function generarRecomendaciones(analisis) {
         tipo: 'info',
         icono: '📝',
         titulo: 'Casi completo',
-        mensaje: `Te faltan ${validacion.faltante}% para completar`,
+        mensaje: `Te faltan ${validacion.faltante} puntos para completar`, 
         acciones: [
-          validacion.faltante > 10 ? 'Agrega un componente mediano' : 'Agrega un componente pequeño',
+          validacion.faltante > 1 ? 'Agrega un componente mediano' : 'Agrega un componente pequeño', 
           'Opciones: Participación, Tareas, Asistencia'
         ]
       });
@@ -918,7 +826,7 @@ function generarRecomendaciones(analisis) {
         tipo: 'error',
         icono: '❌',
         titulo: 'Ponderación excedida',
-        mensaje: `Tienes ${validacion.exceso}% de más`,
+        mensaje: `Tienes ${validacion.exceso} puntos de más`,            
         acciones: [
           'Reduce el valor de algunos componentes',
           'O elimina componentes innecesarios'
@@ -931,7 +839,7 @@ function generarRecomendaciones(analisis) {
         tipo: 'exito',
         icono: '✅',
         titulo: '¡Ponderación completa!',
-        mensaje: 'Tienes el 100% configurado correctamente',
+        mensaje: 'Tienes los 10 puntos configurados correctamente',      
         acciones: ['Ya puedes crear actividades para este parcial']
       });
       break;
@@ -941,14 +849,13 @@ function generarRecomendaciones(analisis) {
         tipo: 'perfecto',
         icono: '🎉',
         titulo: '¡Parcial completamente configurado!',
-        mensaje: `100% ponderado con ${actividades.total} actividades creadas`,
+        mensaje: `10 puntos completos con ${actividades.total} actividades creadas`,
         acciones: ['El parcial está listo para calificaciones']
       });
       break;
   }
 
-  // 🔍 RECOMENDACIONES ADICIONALES SEGÚN ANÁLISIS
-  if (estadisticas.totalComponentes === 1 && estadisticas.sumaTotal < 100) {
+  if (estadisticas.totalComponentes === 1 && estadisticas.sumaTotal < 10) {
     recomendaciones.push({
       tipo: 'sugerencia',
       icono: '💡',
@@ -958,12 +865,12 @@ function generarRecomendaciones(analisis) {
     });
   }
 
-  if (estadisticas.mayorValor > 70) {
+  if (estadisticas.mayorValor > 7) {                                    
     recomendaciones.push({
       tipo: 'advertencia',
       icono: '⚖️',
       titulo: 'Componente muy pesado',
-      mensaje: `Un componente vale ${estadisticas.mayorValor}%`,
+      mensaje: `Un componente vale ${estadisticas.mayorValor} puntos`,   
       acciones: ['Considera balancear mejor la ponderación']
     });
   }
@@ -980,20 +887,16 @@ function generarRecomendaciones(analisis) {
 
   return recomendaciones;
 }
-
-// 🆕 FUNCIÓN: Obtener estadísticas generales del docente
 const obtenerEstadisticasGeneralesDocente = async (req, res) => {
   const { claveDocente } = req.params;
 
   try {
     const pool = await sql.connect(config);
 
-    // Estadísticas por parcial
     const estadisticasParciales = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute(`sp_obtenerEstadisticasGeneralesDocente`);
 
-    // Resumen general
     const resumen = {
       parcialesCompletos: estadisticasParciales.filter(p => p.estado === 'completo').length,
       parcialesIncompletos: estadisticasParciales.filter(p => p.estado === 'incompleto' || p.estado === 'muy_incompleto').length,
@@ -1002,7 +905,6 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
       detallePorMateria: {}
     };
 
-    // Agrupar por materia
     estadisticasParciales.forEach(parcial => {
       if (!resumen.detallePorMateria[parcial.vchClvMateria]) {
         resumen.detallePorMateria[parcial.vchClvMateria] = [];
@@ -1029,16 +931,12 @@ const obtenerEstadisticasGeneralesDocente = async (req, res) => {
   }
 };
 
-// 🆕 FUNCIÓN: Clonar componentes de un parcial a otro
-// 🔧 REEMPLAZAR tu función clonarComponentesParcial con esta versión:
 const clonarComponentesParcial = async (req, res) => {
   const { claveMateria, parcialOrigen, parcialDestino, periodo, claveDocente } = req.body;
   
   try {
-    // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
 
-    // 🔥 VERIFICAR QUE EL PARCIAL DESTINO ESTÉ VACÍO
     const destinoCheck = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcialDestino)
@@ -1054,7 +952,6 @@ const clonarComponentesParcial = async (req, res) => {
       });
     }
 
-    // 🔥 OBTENER COMPONENTES DEL PARCIAL ORIGEN
     const componentesOrigen = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -1072,7 +969,6 @@ const clonarComponentesParcial = async (req, res) => {
       });
     }
 
-    // 🔥 VERIFICAR QUE LA SUMA SEA EXACTAMENTE 10
     const sumaOrigen = componentes.reduce((suma, comp) => suma + parseFloat(comp.valor_componente || 0), 0);
     
     if (sumaOrigen !== 10) {
@@ -1083,7 +979,6 @@ const clonarComponentesParcial = async (req, res) => {
       });
     }
 
-    // 🔥 CLONAR COMPONENTES
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcialOrigen', sql.Int, parcialOrigen)
@@ -1118,7 +1013,6 @@ const clonarComponentesParcial = async (req, res) => {
   }
 };
 
-// Validar suma total de componentes (función auxiliar)
 const validarSumaComponentes = async (req, res) => {
   const { claveMateria, parcial, periodo, claveDocente } = req.params;
 
@@ -1156,7 +1050,6 @@ const validarSumaComponentes = async (req, res) => {
   }
 };
 
-// Obtener componentes para dropdown en crear actividad
 const obtenerComponentesParaDropdown = async (req, res) => {
   const { claveDocente, claveMateria, parcial, periodo } = req.params;
 
@@ -1177,11 +1070,6 @@ const obtenerComponentesParaDropdown = async (req, res) => {
   }
 };
 
-// ===============================================
-// 🔧 FUNCIONES DE CREACIÓN DE ACTIVIDADES - CORREGIDAS
-// ===============================================
-
-// 🔧 FUNCIÓN AUXILIAR: Formatear fechas sin UTC
 const formatearFechaParaSQL = (fecha) => {
   const año = fecha.getFullYear();
   const mes = String(fecha.getMonth() + 1).padStart(2, '0');
@@ -1193,7 +1081,6 @@ const formatearFechaParaSQL = (fecha) => {
   return `${año}-${mes}-${dia} ${hora}:${minuto}:${segundo}`;
 };
 
-// 🔧 FUNCIÓN COMPLETAMENTE CORREGIDA: crearActividadCompletaConComponente
 const crearActividadCompletaConComponente = async (req, res) => {
   const {
     titulo,
@@ -1215,9 +1102,6 @@ const crearActividadCompletaConComponente = async (req, res) => {
     console.log('🚀 Iniciando creación de actividad con SP principal...');
     console.log('📅 fechaEntrega recibida del frontend:', fechaEntrega);
 
-    // ===============================================
-    // 🇲🇽 PASO 1: PROCESAR FECHAS COMO HORA LOCAL 
-    // ===============================================
     let fechaEntregaParaSQL, fechaCreacionParaSQL, fechaAsignacionParaSQL;
 
     try {
@@ -1252,22 +1136,14 @@ const crearActividadCompletaConComponente = async (req, res) => {
       });
     }
 
-    // ===============================================
-    // VALIDACIONES
-    // ===============================================
     if (!idInstrumento || !idValorComponente) {
       return res.status(400).json({ 
         error: 'Faltan datos requeridos (instrumento o componente)'
       });
     }
 
-    // ===============================================
-    // 🚀 PASO 2: USAR SP PRINCIPAL (hace el 80% del trabajo)
-    // ===============================================
     console.log('🎯 Ejecutando SP principal que maneja actividad + grupos + modalidad individual...');
 
-    // Formatear fechas para SQL Server (formato que espera el SP)
-    // 🔧 CORREGIDO: Formatear fechas como hora local SIN conversión UTC
     const formatearFechaParaSQL = (fecha) => {
   const año = fecha.getFullYear();
   const mes = String(fecha.getMonth() + 1).padStart(2, '0');
@@ -1297,7 +1173,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
 
     const respuesta = resultadoPrincipal.recordset[0];
 
-    // 🚨 VERIFICAR SI EL SP PRINCIPAL FALLÓ
     if (respuesta.resultado === 'ERROR') {
       console.error('❌ Error en SP principal:', respuesta.mensaje);
       return res.status(500).json({
@@ -1315,9 +1190,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
     console.log(`   📊 Grupos asignados: ${respuesta.grupos_asignados}`);
     console.log(`   📊 Alumnos asignados: ${respuesta.alumnos_asignados}`);
 
-    // ===============================================
-    // 🚀 PASO 3: MODALIDAD EQUIPO - CON TRANSACCIÓN SEPARADA
-    // ===============================================
     if (modalidad === 2 && Object.keys(equiposPorGrupo).length > 0) {
       console.log('👥 Procesando equipos con SPs específicos en transacción...');
       
@@ -1328,15 +1200,15 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
         
         for (const [claveGrupo, datosGrupo] of Object.entries(equiposPorGrupo)) {
           const grupoQuery = await pool.request()
-            .input('clave', sql.VarChar, claveGrupo)
-            .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
+  .input('clave', sql.VarChar, claveGrupo)
+  .execute('sp_ObtenerIdGrupoPorClave_movil');
+
 
           if (grupoQuery.recordset.length === 0) continue;
           const idGrupo = grupoQuery.recordset[0].id_grupo;
 
           let equiposParaAsignar = [];
           
-          // 🔧 CASO 1: Usar equipos de actividad anterior
           if (datosGrupo.tipoSeleccion === 'actividad' && datosGrupo.idActividadAnterior) {
             console.log(`📋 Obteniendo equipos de actividad anterior: ${datosGrupo.idActividadAnterior}`);
             
@@ -1352,7 +1224,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
             equiposParaAsignar = equiposAnteriores.recordset.map(e => e.id_equipo);
             console.log(`✅ Encontrados ${equiposParaAsignar.length} equipos anteriores`);
 
-          // 🔧 CASO 2: Crear equipos nuevos
           } else if ((datosGrupo.tipoSeleccion === 'aleatorio' || datosGrupo.tipoSeleccion === 'manual') && datosGrupo.equiposNuevos) {
             console.log(`📋 Creando ${datosGrupo.equiposNuevos.length} equipos nuevos`);
             
@@ -1364,7 +1235,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
 
               const nombreEquipoUnico = `${equipoNuevo.nombre}_${Date.now()}`;
               
-              // 🚀 SP: Crear equipo
               const equipoCreado = await equipoTransaction.request()
                 .input('idGrupo', sql.Int, idGrupo)
                 .input('nombreEquipo', sql.NVarChar, nombreEquipoUnico)
@@ -1376,7 +1246,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
 
               const idEquipoCreado = equipoCreado.recordset[0].id_equipo;
 
-              // 🚀 SP: Asignar integrantes
               for (const integrante of equipoNuevo.integrantes) {
                 if (!integrante.vchMatricula) continue;
 
@@ -1391,7 +1260,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
             }
           }
 
-          // 🚀 SP: Asignar equipos a la actividad
           console.log(`🎯 Asignando ${equiposParaAsignar.length} equipos a la actividad`);
 
           for (const idEquipo of equiposParaAsignar) {
@@ -1422,9 +1290,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
       }
     }
 
-    // ===============================================
-    // 🚀 PASO 4: VERIFICACIÓN FINAL
-    // ===============================================
     console.log('🔍 Ejecutando verificación automática...');
     
     try {
@@ -1438,9 +1303,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
       console.log('⚠️ Verificación automática no disponible, continuando...');
     }
 
-    // ===============================================
-    // 🎉 RESPUESTA EXITOSA
-    // ===============================================
     console.log('🎉 ¡Actividad creada exitosamente con SP optimizado!');
 
     res.status(201).json({ 
@@ -1476,7 +1338,6 @@ const fechaEntregaString = formatearFechaParaSQL(fechaEntregaParaSQL);
   }
 };
 
-// 🔧 FUNCIÓN CORREGIDA: crearActividad (versión original sin componente)
 const crearActividad = async (req, res) => {
   const {
     titulo,
@@ -1492,7 +1353,6 @@ const crearActividad = async (req, res) => {
   try {
     const pool = await sql.connect(config);
 
-    // 🚀 PASO 1: Obtener instrumento usando SP
     const instrumentoResult = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -1507,13 +1367,11 @@ const crearActividad = async (req, res) => {
 
     const idInstrumento = instrumentoResult.recordset[0].id_instrumento;
 
-    // 🚀 PASO 2: Obtener siguiente número de actividad usando SP
     const numeroResult = await pool.request()
       .execute('sp_numeroResult2');
     
     const numeroActividad = numeroResult.recordset[0].siguiente;
 
-    // 🚀 PASO 3: Crear actividad usando SP
     const actividadResult = await pool.request()
       .input('titulo', sql.NVarChar, titulo)
       .input('descripcion', sql.NVarChar, descripcion)
@@ -1521,16 +1379,14 @@ const crearActividad = async (req, res) => {
       .input('docente', sql.NVarChar, claveDocente)
       .input('idInstrumento', sql.Int, idInstrumento)
       .input('numero', sql.Int, numeroActividad)
-      .input('modalidad', sql.Int, 1) // Siempre individual
+      .input('modalidad', sql.Int, 1)
       .execute('sp_actividadResult');
 
     const idActividad = actividadResult.recordset[0].idActividad;
 
-    // 🚀 PASO 4: Procesar cada grupo usando SPs
     let totalAlumnosAsignados = 0;
 
     for (const claveGrupo of grupos) {
-      // Obtener ID de grupo
       const grupoQuery = await pool.request()
         .input('clave', sql.VarChar, claveGrupo)
         .query('SELECT TOP 1 id_grupo FROM tbl_grupos WHERE vchGrupo = @clave');
@@ -1538,7 +1394,6 @@ const crearActividad = async (req, res) => {
       if (grupoQuery.recordset.length === 0) continue;
       const idGrupo = grupoQuery.recordset[0].id_grupo;
 
-      // 🚀 SP: Insertar actividad-grupo
       await pool.request()
         .input('idActividad', sql.Int, idActividad)
         .input('idGrupo', sql.Int, idGrupo)
@@ -1546,7 +1401,6 @@ const crearActividad = async (req, res) => {
         .input('fechaEntrega', sql.DateTime, fechaEntrega)
         .execute('sp_InsertarActividadGrupo');
 
-      // 🚀 SP: Obtener periodo/cuatrimestre
       const periodoResult = await pool.request()
         .input('claveDocente', sql.VarChar, claveDocente)
         .input('claveMateria', sql.VarChar, claveMateria)
@@ -1555,19 +1409,17 @@ const crearActividad = async (req, res) => {
       if (periodoResult.recordset.length === 0) continue;
       const { vchCuatrimestre, Periodo } = periodoResult.recordset[0];
 
-      // 🚀 SP: Obtener alumnos del grupo
       const alumnosResult = await pool.request()
         .input('idGrupo', sql.Int, idGrupo)
         .input('cuatrimestre', sql.VarChar, vchCuatrimestre)
         .input('periodo', sql.VarChar, Periodo)
         .execute('sp_alumnosResult');
 
-      // 🚀 SP: Asignar cada alumno con estado PENDIENTE
       for (const alumno of alumnosResult.recordset) {
         await pool.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, alumno.vchMatricula)
-          .input('idEstado', sql.Int, 1) // 1 = PENDIENTE
+          .input('idEstado', sql.Int, 1)
           .execute('sp_AsignarAlumnoActividadPendiente');
         
         totalAlumnosAsignados++;
@@ -1612,11 +1464,7 @@ const crearActividad = async (req, res) => {
     });
   }
 };
-// ===============================================
-// 🆕 FUNCIONES PARA OBSERVACIONES
-// ===============================================
 
-// Guardar observación de alumno individual
 const guardarObservacionAlumno = async (req, res) => {
   const { idActividadAlumno, observacion } = req.body;
 
@@ -1639,7 +1487,6 @@ const guardarObservacionAlumno = async (req, res) => {
   }
 };
 
-// Guardar observación de equipo
 const guardarObservacionEquipo = async (req, res) => {
   const { idActividadEquipo, observacion } = req.body;
 
@@ -1662,7 +1509,6 @@ const guardarObservacionEquipo = async (req, res) => {
   }
 };
 
-// Obtener observación existente de alumno
 const obtenerObservacionAlumno = async (req, res) => {
   const { idActividadAlumno } = req.params;
 
@@ -1682,7 +1528,6 @@ const obtenerObservacionAlumno = async (req, res) => {
   }
 };
 
-// Obtener observación existente de equipo
 const obtenerObservacionEquipo = async (req, res) => {
   const { idActividadEquipo } = req.params;
 
@@ -1702,11 +1547,6 @@ const obtenerObservacionEquipo = async (req, res) => {
   }
 };
 
-// ===============================================
-// 🆕 FUNCIONES PARA PROCEDIMIENTOS ALMACENADOS
-// ===============================================
-
-// Ejecutar procedimiento para concentrado final
 const obtenerConcentradoFinal = async (req, res) => {
   const { parcial, grupo, periodo, cuatrimestre, materia } = req.params;
 
@@ -1732,11 +1572,6 @@ const obtenerConcentradoFinal = async (req, res) => {
   }
 };
 
-// ===============================================
-// CONTINUACIÓN DEL CONTROLLER - PARTE 2
-// ===============================================
-
-// Ejecutar procedimiento para calificaciones de actividad
 const obtenerCalificacionesActividad = async (req, res) => {
   const { parcial, grupo, periodo, cuatrimestre, materia } = req.params;
 
@@ -1762,11 +1597,6 @@ const obtenerCalificacionesActividad = async (req, res) => {
   }
 };
 
-// ===============================================
-// FUNCIONES EXISTENTES OPTIMIZADAS
-// ===============================================
-
-// Obtener listas de cotejo
 const obtenerListasCotejo = async (req, res) => {
   const { claveDocente, claveMateria } = req.params;
 
@@ -1785,8 +1615,6 @@ const obtenerListasCotejo = async (req, res) => {
   }
 };
 
-// 🔧 FUNCIÓN OPTIMIZADA: obtenerActividadesPorGrupo - CON SISTEMA DE ESTADOS V2
-// 🔧 FUNCIÓN OPTIMIZADA: obtenerActividadesPorGrupo - CON CONTEO CORRECTO POR GRUPO
 const obtenerActividadesPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
   const { parcial, modalidad } = req.query;
@@ -1796,13 +1624,11 @@ const obtenerActividadesPorGrupo = async (req, res) => {
     
     console.log(`📊 Cargando actividades para grupo específico: ${idGrupo}`);
     
-    // 🎯 CONFIGURAR PARÁMETROS PARA EL STORED PROCEDURE
     const request = pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo);
     
-    // Agregar parámetros opcionales (null si no se proporcionan)
     if (parcial) {
       request.input('parcial', sql.Int, parcial);
     } else {
@@ -1815,10 +1641,8 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       request.input('modalidad', sql.Int, null);
     }
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await request.execute('sp_obtenerActividadesPorGrupo');
 
-    // 🎯 PROCESAR RESULTADOS CON ESTADÍSTICAS FILTRADAS POR GRUPO
     const actividadesPorParcial = {};
     
     result.recordset.forEach(actividad => {
@@ -1838,7 +1662,6 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         };
       }
 
-      // ✅ USAR ESTADO REAL CALCULADO PARA EL GRUPO
       const estado = actividad.estadoActividad;
       
       actividadesPorParcial[parcial].actividades.push({
@@ -1851,7 +1674,6 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         modalidad: (actividad.id_modalidad === 2) ? 'equipo' : 'individual',
         estado: estado,
         
-        // 📊 ESTADÍSTICAS DETALLADAS FILTRADAS POR GRUPO
         estadisticasDetalladas: {
           pendientes: actividad.alumnosPendientes || 0,
           entregadosATiempo: actividad.entregadosATiempo || 0,
@@ -1867,19 +1689,16 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         componente: actividad.nombre_componente || 'Sin componente',
         parcial: actividad.parcial,
         
-        // 🚨 INDICADORES DE ATENCIÓN
         urgente: actividad.diasRestantes <= 2 && estado === 'activa',
         requiereAtencion: (actividad.alumnosPendientes || 0) > 0 && actividad.diasRestantes < 0
       });
 
-      // Actualizar estadísticas del parcial
       actividadesPorParcial[parcial].estadisticas.total++;
       if (estado === 'activa') actividadesPorParcial[parcial].estadisticas.pendientes++;
       if (estado === 'completada') actividadesPorParcial[parcial].estadisticas.completadas++;
       if (estado === 'vencida' || estado === 'pendiente_vencida') actividadesPorParcial[parcial].estadisticas.vencidas++;
     });
 
-    // 🎯 ESTADÍSTICAS GLOBALES OPTIMIZADAS - FILTRADAS POR GRUPO
     const estadisticasGlobales = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -1893,7 +1712,6 @@ const obtenerActividadesPorGrupo = async (req, res) => {
       totalActividades: 0
     };
 
-    // Convertir parciales a array ordenado
     const parciales = Object.keys(actividadesPorParcial)
       .map(Number)
       .sort((a, b) => a - b)
@@ -1910,7 +1728,6 @@ const obtenerActividadesPorGrupo = async (req, res) => {
         pendientes: stats.totalPendientes,
         vencidas: stats.actividadesVencidas
       },
-      // 🎯 METADATOS CON EL NUEVO SISTEMA
       metadata: {
         grupoEspecifico: idGrupo,
         sistemaEstados: 'optimizado_v2_por_grupo',
@@ -1930,21 +1747,18 @@ const obtenerActividadesPorGrupo = async (req, res) => {
   }
 };
 
-// Cambiar contraseña del docente
 const cambiarContrasenaDocente = async (req, res) => {
   const { usuario, contrasenaActual, nuevaContrasena } = req.body;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('usuario', sql.VarChar, usuario)
       .input('contrasenaActual', sql.VarChar, contrasenaActual)
       .input('nuevaContrasena', sql.VarChar, nuevaContrasena)
       .execute('sp_cambiarContrasenaDocente');
 
-    // ✅ Si llega aquí, la operación fue exitosa
     const mensaje = result.recordset[0]?.mensaje || 'Contraseña actualizada correctamente';
     
     res.json({ 
@@ -1955,7 +1769,6 @@ const cambiarContrasenaDocente = async (req, res) => {
   } catch (err) {
     console.error('❌ Error al cambiar contraseña:', err);
     
-    // 🎯 MANEJAR ERRORES DEL STORED PROCEDURE
     if (err.message && err.message.includes('La contraseña actual es incorrecta')) {
       return res.status(400).json({ 
         mensaje: 'La contraseña actual es incorrecta',
@@ -1963,18 +1776,13 @@ const cambiarContrasenaDocente = async (req, res) => {
       });
     }
     
-    // Error genérico del servidor
     res.status(500).json({ 
       mensaje: 'Error en el servidor',
       success: false 
     });
   }
 };
-// ===============================================
-// FUNCIONES PARA MANEJO DE EQUIPOS
-// ===============================================
 
-// Obtener equipos existentes de un grupo específico
 const obtenerEquiposPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
 
@@ -1991,48 +1799,41 @@ const obtenerEquiposPorGrupo = async (req, res) => {
   }
 };
 
-// Obtener alumnos disponibles de un grupo
 const obtenerAlumnosPorGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE (combina ambas consultas)
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('idGrupo', sql.Int, idGrupo)
       .execute('sp_obtenerAlumnosPorGrupo');
 
-    // ✅ Retornar los alumnos encontrados
     res.json(result.recordset);
 
   } catch (error) {
     console.error('❌ Error al obtener alumnos:', error);
     
-    // 🎯 MANEJAR ERROR ESPECÍFICO DEL STORED PROCEDURE
     if (error.message && error.message.includes('No se encontró la relación docente-materia')) {
       return res.status(404).json({ 
         error: 'No se encontró la relación docente-materia' 
       });
     }
     
-    // Error genérico del servidor
     res.status(500).json({ 
       error: 'Error del servidor' 
     });
   }
 };
 
-// Simular equipos aleatorios (sin insertar en BD)
 const simularEquiposAleatorios = async (req, res) => {
   const { idGrupo, cantidadEquipos, claveDocente, claveMateria } = req.body;
 
   try {
     const pool = await sql.connect(config);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (combina periodo + alumnos aleatorizados)
     const result = await pool.request()
       .input('idGrupo', sql.Int, idGrupo)
       .input('cantidadEquipos', sql.Int, cantidadEquipos)
@@ -2046,7 +1847,6 @@ const simularEquiposAleatorios = async (req, res) => {
       return res.status(400).json({ error: 'No hay alumnos disponibles' });
     }
 
-    // 🎯 LÓGICA DE DISTRIBUCIÓN EN EQUIPOS (ya vienen aleatorizados del SP)
     const alumnosPorEquipo = Math.floor(alumnos.length / cantidadEquipos);
     const alumnosSobrantes = alumnos.length % cantidadEquipos;
 
@@ -2063,7 +1863,7 @@ const simularEquiposAleatorios = async (req, res) => {
       }
 
       equiposSimulados.push({
-        id_temporal: Date.now() + i, // ID temporal único
+        id_temporal: Date.now() + i,
         nombre: `Equipo ${i}`,
         integrantes,
         esNuevo: true
@@ -2083,14 +1883,12 @@ const simularEquiposAleatorios = async (req, res) => {
   } catch (error) {
     console.error('❌ Error al simular equipos:', error);
     
-    // 🎯 MANEJAR ERRORES ESPECÍFICOS DEL STORED PROCEDURE
     if (error.message && error.message.includes('No se encontró la relación docente-materia')) {
       return res.status(404).json({ 
         error: 'No se encontró la relación docente-materia' 
       });
     }
     
-    // Error genérico del servidor
     res.status(500).json({ 
       error: 'Error del servidor' 
     });
@@ -2105,7 +1903,6 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
     
     console.log(`🔍 Obteniendo actividades con equipos para grupo específico: ${idGrupo}`);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -2114,7 +1911,6 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
 
     console.log(`✅ Actividades con equipos encontradas para grupo ${idGrupo}: ${result.recordset.length}`);
     
-    // 🆕 DEBUG: Mostrar detalles de las actividades encontradas
     if (result.recordset.length > 0) {
       console.log('📋 Actividades con equipos del grupo:', result.recordset.map(act => ({
         titulo: act.titulo,
@@ -2133,19 +1929,12 @@ const obtenerActividadesConEquiposPorGrupo = async (req, res) => {
   }
 };
 
-// ===============================================
-// FUNCIONES PARA CALIFICAR ACTIVIDADES - CORREGIDAS
-// ===============================================
-
-// 🔧 CORREGIDO: Obtener datos de actividad para calificar
-
 const obtenerDatosActividad = async (req, res) => {
   const { idActividad } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .execute('sp_obtenerDatosActividad');
@@ -2161,55 +1950,45 @@ const obtenerDatosActividad = async (req, res) => {
   }
 };
 
-// Obtener criterios de evaluación de una actividad
 const obtenerCriteriosActividad = async (req, res) => {
   const { idActividad } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE (combina ambas consultas)
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .execute('sp_obtenerCriteriosActividad');
 
-    // ✅ Los criterios ya vienen con el formato correcto del SP
     res.json(result.recordset);
     
   } catch (error) {
     console.error('❌ Error al obtener criterios:', error);
     
-    // 🎯 MANEJAR ERROR ESPECÍFICO DEL STORED PROCEDURE
     if (error.message && error.message.includes('Instrumento no encontrado')) {
       return res.status(404).json({ 
         error: 'Instrumento no encontrado' 
       });
     }
     
-    // Error genérico del servidor
     res.status(500).json({ 
       error: 'Error del servidor' 
     });
   }
 };
 
-// Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
-// Obtener equipos para calificar (modalidad equipo) - CÁLCULO COMPLETAMENTE CORREGIDO
-// Obtener equipos para calificar - FILTRO CORREGIDO
 const obtenerEquiposParaCalificar = async (req, res) => {
   const { idActividad } = req.params;
-  const { idGrupo } = req.query; // 🔧 PARÁMETRO DEL GRUPO
+  const { idGrupo } = req.query;
 
   try {
     const pool = await sql.connect(config);
     
     console.log(`🔍 Obteniendo equipos para calificar: Actividad=${idActividad}, Grupo=${idGrupo}`);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (combina todas las consultas)
     const request = pool.request()
       .input('idActividad', sql.Int, idActividad);
 
-    // 🆕 AGREGAR FILTRO POR GRUPO SI SE PROPORCIONA
     if (idGrupo) {
       request.input('idGrupo', sql.Int, parseInt(idGrupo));
       console.log(`🎯 Filtrando por ID de grupo numérico: ${idGrupo}`);
@@ -2221,7 +2000,6 @@ const obtenerEquiposParaCalificar = async (req, res) => {
 
     console.log(`✅ Equipos encontrados para grupo ID ${idGrupo}: ${result.recordset.length}`);
     
-    // 🆕 DEBUG: Mostrar detalles de los equipos encontrados
     if (result.recordset.length > 0) {
       console.log('📋 Equipos encontrados:', result.recordset.map(e => ({
         nombre: e.nombre_equipo,
@@ -2238,14 +2016,13 @@ const obtenerEquiposParaCalificar = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-// Obtener alumnos para calificar (modalidad individual) - CÁLCULO COMPLETAMENTE CORREGIDO
+
 const obtenerAlumnosParaCalificar = async (req, res) => {
   const { idActividad } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE (combina todas las consultas)
     const result = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .execute('sp_obtenerAlumnosParaCalificar');
@@ -2264,16 +2041,13 @@ const obtenerCalificacionesAlumno = async (req, res) => {
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE (devuelve múltiples conjuntos de resultados)
     const result = await pool.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .execute('sp_ObtenerCalificacionesAlumno');
 
-    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
-    const calificaciones = result.recordsets[0]; // Primer SELECT: calificaciones
-    const observacionData = result.recordsets[1]; // Segundo SELECT: observación
+    const calificaciones = result.recordsets[0];
+    const observacionData = result.recordsets[1];
 
-    // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
     res.json({
       calificaciones: calificaciones,
       observacion: observacionData[0]?.observacion || null
@@ -2284,24 +2058,20 @@ const obtenerCalificacionesAlumno = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-// Obtener calificaciones existentes de un equipo - CORREGIDA
-// Obtener calificaciones existentes de un equipo - CORREGIDA
+
 const obtenerCalificacionesEquipo = async (req, res) => {
   const { idActividadEquipo } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE (devuelve múltiples conjuntos de resultados)
     const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .execute('sp_ObtenerCalificacionesEquipo');
 
-    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
-    const calificaciones = result.recordsets[0]; // Primer SELECT: calificaciones
-    const observacionData = result.recordsets[1]; // Segundo SELECT: observación
+    const calificaciones = result.recordsets[0];
+    const observacionData = result.recordsets[1];
 
-    // 🆕 RESPUESTA COMPLETA CON OBSERVACIÓN
     res.json({
       calificaciones: calificaciones,
       observacion: observacionData[0]?.observacion || null
@@ -2313,8 +2083,6 @@ const obtenerCalificacionesEquipo = async (req, res) => {
   }
 };
 
-// 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON ACTUALIZACIÓN DE ESTADO
-// 🔧 CORREGIDO: Guardar calificaciones de un alumno - CON OBSERVACIONES
 const guardarCalificacionesAlumno = async (req, res) => {
   const { idActividadAlumno, calificaciones, observacion } = req.body;
 
@@ -2328,12 +2096,10 @@ const guardarCalificacionesAlumno = async (req, res) => {
     console.log(`💬 OBSERVACIÓN RECIBIDA DEL FRONTEND:`, observacion);
     console.log(`📊 CALIFICACIONES:`, calificaciones);
 
-    // PASO 1: Eliminar calificaciones existentes usando SP
     await transaction.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
       .execute('sp_EliminarCalificacionesAlumno');
 
-    // PASO 2: Insertar nuevas calificaciones usando SP
     for (const cal of calificaciones) {
       await transaction.request()
         .input('idActividadAlumno', sql.Int, idActividadAlumno)
@@ -2342,10 +2108,9 @@ const guardarCalificacionesAlumno = async (req, res) => {
         .execute('sp_InsertarCalificacion');
     }
 
-    // PASO 3: Actualizar estado y observación usando SP
     await transaction.request()
       .input('idActividadAlumno', sql.Int, idActividadAlumno)
-      .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+      .input('nuevoEstado', sql.Int, 2)
       .input('observacion', sql.NVarChar, observacion || null)
       .execute('sp_ActualizarEstadoYObservacion');
 
@@ -2383,12 +2148,10 @@ const guardarCalificacionesEquipo = async (req, res) => {
     console.log('💬 Observación:', observacion);
     console.log('🎯 Integrantes personalizados:', integrantesPersonalizados);
 
-    // PASO 1: Eliminar calificaciones existentes del equipo usando SP
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .execute('sp_EliminarCalificacionesEquipo');
 
-    // PASO 2: Obtener todos los integrantes del equipo usando SP
     const integrantesResult = await transaction.request()
       .input('idEquipo', sql.Int, idEquipo)
       .execute('sp_ObtenerIntegrantesEquipo');
@@ -2400,7 +2163,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
       throw new Error('No se encontraron integrantes en el equipo');
     }
 
-    // PASO 3: Obtener la actividad para verificar modalidad usando SP
     const actividadResult = await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .execute('sp_ObtenerIdActividadEquipo');
@@ -2411,7 +2173,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
     const idActividad = actividadResult.recordset[0].id_actividad;
 
-    // PASO 4: Insertar nuevas calificaciones en tabla de equipos usando SP
     for (const cal of calificaciones) {
       await transaction.request()
         .input('idEquipo', sql.Int, idEquipo)
@@ -2421,14 +2182,12 @@ const guardarCalificacionesEquipo = async (req, res) => {
         .execute('sp_InsertarCalificacionEquipo');
     }
 
-    // PASO 5: Actualizar estado y observación del equipo usando SP
     await transaction.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
-      .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+      .input('nuevoEstado', sql.Int, 2)
       .input('observacion', sql.NVarChar, observacion || null)
       .execute('sp_ActualizarEstadoYObservacionEquipo');
 
-    // PASO 6: MAPEAR MATRÍCULAS TEMPORALES A REALES
     console.log('🔧 Mapeando matrículas temporales a reales...');
     const integrantesPersonalizadosConMatriculasReales = [];
 
@@ -2450,11 +2209,9 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
     console.log('✅ Mapeo completado:', integrantesPersonalizadosConMatriculasReales);
 
-    // PASO 7: PROCESAR CALIFICACIONES INDIVIDUALES O GRUPALES
     for (const integrante of integrantes) {
       console.log(`📝 Procesando calificaciones para ${integrante.vchMatricula}`);
 
-      // Buscar si este integrante tiene calificaciones personalizadas
       const integrantePersonalizado = integrantesPersonalizadosConMatriculasReales?.find(
         ip => ip.vchMatricula === integrante.vchMatricula
       );
@@ -2464,7 +2221,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
       console.log(`🎯 ${integrante.vchMatricula} - Personalizada: ${tieneCalificacionPersonalizada}`);
 
-      // Verificar si existe registro en tbl_actividad_alumno usando SP
       const actividadAlumnoResult = await transaction.request()
         .input('idActividad', sql.Int, idActividad)
         .input('matricula', sql.VarChar, integrante.vchMatricula)
@@ -2473,15 +2229,13 @@ const guardarCalificacionesEquipo = async (req, res) => {
       let idActividadAlumno;
 
       if (actividadAlumnoResult.recordset.length === 0) {
-        // Crear registro usando SP
         await transaction.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
-          .input('estadoInicial', sql.Int, 2) // 2 = Entregado
+          .input('estadoInicial', sql.Int, 2)
           .input('observacion', sql.NVarChar, observacionPersonalizada || null)
           .execute('sp_CrearActividadAlumno');
         
-        // Obtener el ID insertado usando SP
         const nuevoIdResult = await transaction.request()
           .input('idActividad', sql.Int, idActividad)
           .input('matricula', sql.VarChar, integrante.vchMatricula)
@@ -2492,24 +2246,20 @@ const guardarCalificacionesEquipo = async (req, res) => {
       } else {
         idActividadAlumno = actividadAlumnoResult.recordset[0].id_actividad_alumno;
         
-        // Actualizar estado y observación usando SP
         await transaction.request()
           .input('idActividadAlumno', sql.Int, idActividadAlumno)
-          .input('nuevoEstado', sql.Int, 2) // 2 = Entregado
+          .input('nuevoEstado', sql.Int, 2)
           .input('observacion', sql.NVarChar, observacionPersonalizada || null)
           .execute('sp_ActualizarEstadoObservacionAlumno');
         
         console.log(`✅ Actualizando tbl_actividad_alumno existente: ${idActividadAlumno}`);
       }
 
-      // Eliminar calificaciones individuales existentes para este alumno usando SP
       await transaction.request()
         .input('idActividadAlumno', sql.Int, idActividadAlumno)
         .execute('sp_EliminarCalificacionesIndividualesAlumno');
 
-      // INSERTAR CALIFICACIONES: PERSONALIZADAS O DEL EQUIPO
       if (tieneCalificacionPersonalizada && integrantePersonalizado.criteriosPersonalizados) {
-        // USAR CALIFICACIONES PERSONALIZADAS
         console.log(`🌟 Aplicando calificaciones PERSONALIZADAS para ${integrante.vchMatricula}`);
         
         for (const [idCriterio, calificacionPersonalizada] of Object.entries(integrantePersonalizado.criteriosPersonalizados)) {
@@ -2522,7 +2272,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
           console.log(`   ✅ Criterio ${idCriterio}: ${calificacionPersonalizada} puntos`);
         }
       } else {
-        // USAR CALIFICACIONES DEL EQUIPO
         console.log(`📊 Aplicando calificaciones del EQUIPO para ${integrante.vchMatricula}`);
         
         for (const cal of calificaciones) {
@@ -2537,7 +2286,6 @@ const guardarCalificacionesEquipo = async (req, res) => {
 
     await transaction.commit();
     
-    // ESTADÍSTICAS FINALES
     const integrantesPersonalizadosCount = integrantesPersonalizadosConMatriculasReales?.filter(ip => ip.tieneCalificacionPersonalizada).length || 0;
     const integrantesGeneralesCount = integrantes.length - integrantesPersonalizadosCount;
     
@@ -2573,20 +2321,12 @@ const guardarCalificacionesEquipo = async (req, res) => {
   }
 };
 
-// ===============================================
-// 🆕 FUNCIONES AUXILIARES ADICIONALES
-// ===============================================
-
-
-
-// Obtener periodos de un docente (debug)
 const obtenerPeriodosDocente = async (req, res) => {
   const { clave } = req.params;
 
   try {
     const pool = await sql.connect(config);
     
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .execute('sp_ObtenerPeriodosDocente');
@@ -2597,14 +2337,13 @@ const obtenerPeriodosDocente = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-// Obtener materias por periodo específico
+
 const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
   const { clave, periodo } = req.params;
 
   try {
     const pool = await sql.connect(config);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('clave', sql.VarChar, clave)
       .input('periodo', sql.VarChar, periodo || '20251')
@@ -2618,7 +2357,7 @@ const obtenerMateriasCompletasPorPeriodo = async (req, res) => {
     res.status(500).json({ mensaje: 'Error en el servidor' });
   }
 };
-// 🔧 FUNCIÓN OPTIMIZADA: obtenerEstadisticasGrupo - CON SISTEMA DE ESTADOS V2
+
 const obtenerEstadisticasGrupo = async (req, res) => {
   const { claveDocente, claveMateria, idGrupo } = req.params;
 
@@ -2627,7 +2366,6 @@ const obtenerEstadisticasGrupo = async (req, res) => {
 
     console.log(`📊 Calculando estadísticas optimizadas para: Docente=${claveDocente}, Materia=${claveMateria}, Grupo=${idGrupo}`);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza toda la CTE compleja)
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -2657,7 +2395,6 @@ const obtenerEstadisticasGrupo = async (req, res) => {
           Math.round((stats.actividadesCompletas / stats.totalActividades) * 100) : 0,
         requiereAtencion: stats.actividadesVencidas > 0 || stats.totalPendientes > 10,
         
-        // 🎯 DISTRIBUCIÓN DE ESTADOS
         distribucionEstados: {
           pendientes: stats.totalPendientes,
           entregados: stats.totalEntregados,
@@ -2672,7 +2409,7 @@ const obtenerEstadisticasGrupo = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
-// Función 1: Obtener calificaciones individuales de integrantes de equipo
+
 const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
   const { idActividadEquipo } = req.params;
 
@@ -2681,19 +2418,15 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
     
     console.log(`📊 Obteniendo calificaciones individuales para equipo ID: ${idActividadEquipo}`);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza las 3 consultas complejas)
     const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .execute('sp_ObtenerCalificacionesIntegrantesEquipo');
 
-    // 📊 EXTRAER LOS DOS CONJUNTOS DE RESULTADOS
-    const integrantesData = result.recordsets[0]; // Primer SELECT: datos principales
-    const calificacionesDetalladas = result.recordsets[1]; // Segundo SELECT: calificaciones por criterio
+    const integrantesData = result.recordsets[0];
+    const calificacionesDetalladas = result.recordsets[1];
 
-    // Obtener valor total del instrumento (se puede inferir o agregar al SP)
-    const valorTotal = 10; // Valor por defecto o se puede calcular desde los datos
+    const valorTotal = 10;
 
-    // 📊 ESTRUCTURAR DATOS POR INTEGRANTE (misma lógica que antes)
     const integrantes = integrantesData.map(integrante => {
       const calificacionesPorCriterio = calificacionesDetalladas
         .filter(cal => cal.vchMatricula === integrante.vchMatricula)
@@ -2712,7 +2445,6 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
       };
     });
 
-    // 🎯 CALCULAR ESTADÍSTICAS DEL EQUIPO (misma lógica que antes)
     const integrantesConCalificacion = integrantes.filter(i => i.tieneCalificacionIndividual);
     const estadisticasEquipo = {
       totalIntegrantes: integrantes.length,
@@ -2729,7 +2461,6 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
     console.log(`✅ Obtenidas calificaciones de ${integrantes.length} integrantes`);
     console.log(`📊 Promedio del equipo: ${estadisticasEquipo.promedioEquipo}`);
 
-    // 🎯 RESPUESTA ESTRUCTURADA (misma estructura que antes)
     res.json({
       equipo: {
         id_equipo: integrantesData[0]?.id_equipo,
@@ -2752,7 +2483,6 @@ const obtenerCalificacionesIntegrantesEquipo = async (req, res) => {
   }
 };
 
-// Función 2: Comparativa equipo vs individuales (opcional, para análisis avanzado)
 const obtenerComparativaEquipoIndividual = async (req, res) => {
   const { idActividadEquipo } = req.params;
 
@@ -2761,7 +2491,6 @@ const obtenerComparativaEquipoIndividual = async (req, res) => {
     
     console.log(`📊 Generando comparativa equipo vs individual para ID: ${idActividadEquipo}`);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE
     const result = await pool.request()
       .input('idActividadEquipo', sql.Int, idActividadEquipo)
       .execute('sp_ObtenerComparativaEquipoIndividual');
@@ -2782,6 +2511,7 @@ const obtenerComparativaEquipoIndividual = async (req, res) => {
     res.status(500).json({ error: 'Error del servidor' });
   }
 };
+
 const obtenerEstadisticasCentroControl = async (req, res) => {
   const { claveDocente, claveMateria } = req.params;
 
@@ -2790,7 +2520,6 @@ const obtenerEstadisticasCentroControl = async (req, res) => {
     
     console.log(`📊 Obteniendo estadísticas REALES: Docente=${claveDocente}, Materia=${claveMateria}`);
 
-    // 🚀 EJECUTAR EL STORED PROCEDURE (reemplaza toda la CTE súper compleja)
     const result = await pool.request()
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('claveMateria', sql.VarChar, claveMateria)
@@ -2847,10 +2576,8 @@ const guardarComponentesMasivo = async (req, res) => {
   let transaction;
 
   try {
-    // 🔥 CONECTAR AL POOL PRIMERO
     pool = await sql.connect(config);
     
-    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
     let periodoReal = periodo;
     if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
       console.log('🔄 Resolviendo periodo automático...');
@@ -2864,32 +2591,27 @@ const guardarComponentesMasivo = async (req, res) => {
       console.log(`✅ Periodo resuelto: ${periodoReal}`);
     }
     
-    // 🔥 CREAR TRANSACCIÓN DESDE EL POOL
     transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     console.log(`🔄 Iniciando guardado masivo: ${operaciones.length} operaciones`);
     console.log(`📅 Usando periodo: ${periodoReal}`);
 
-    // 🔥 VALIDAR QUE LA SUMA FINAL SEA EXACTAMENTE 10
     const operacionesCrear = operaciones.filter(op => op.tipo === 'crear');
     const operacionesModificar = operaciones.filter(op => op.tipo === 'modificar');
     const operacionesEliminar = operaciones.filter(op => op.tipo === 'eliminar');
 
-    // Calcular suma después de todas las operaciones
     let sumaFinal = 0;
 
-    // Obtener suma actual de componentes que NO se van a eliminar ni modificar
     const componentesActualesResult = await transaction.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
+      .input('vchPeriodo', sql.VarChar, periodoReal)
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_ObtenerComponentesMateria');
 
     const componentesActuales = componentesActualesResult.recordset || [];
     
-    // Sumar componentes que se mantienen sin cambios
     componentesActuales.forEach(comp => {
       const seElimina = operacionesEliminar.some(op => op.id === comp.id_valor_componente);
       const seModifica = operacionesModificar.some(op => op.id === comp.id_valor_componente);
@@ -2899,19 +2621,16 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     });
 
-    // Sumar componentes nuevos
     operacionesCrear.forEach(op => {
       sumaFinal += parseFloat(op.valorComponente || 0);
     });
 
-    // Sumar componentes modificados
     operacionesModificar.forEach(op => {
       sumaFinal += parseFloat(op.valorComponente || 0);
     });
 
     console.log(`📊 Suma final calculada: ${sumaFinal}`);
 
-    // 🚨 VALIDAR QUE SEA EXACTAMENTE 10
     if (Math.abs(sumaFinal - 10) > 0.01) {
       await transaction.rollback();
       return res.status(400).json({
@@ -2925,25 +2644,18 @@ const guardarComponentesMasivo = async (req, res) => {
       });
     }
 
-    // 📊 CONTADORES PARA RESPUESTA
     let componentesCreados = 0;
     let componentesModificados = 0;
     let componentesEliminados = 0;
     const errores = [];
 
-    // 🔥 PASO 2: ELIMINAR COMPONENTES
     for (const operacion of operacionesEliminar) {
       try {
         console.log(`🗑️ Eliminando componente ID: ${operacion.id}`);
         
-        // Verificar si tiene actividades vinculadas
         const vinculaciones = await transaction.request()
-          .input('idComponente', sql.Int, operacion.id)
-          .query(`
-            SELECT COUNT(*) as cantidad
-            FROM tbl_actividades a
-            WHERE a.id_valor_componente = @idComponente
-          `);
+  .input('idComponente', sql.Int, operacion.id)
+  .execute('sp_ContarActividadesComponente_movil');
 
         if (vinculaciones.recordset[0]?.cantidad > 0) {
           errores.push({
@@ -2954,7 +2666,6 @@ const guardarComponentesMasivo = async (req, res) => {
           continue;
         }
 
-        // Eliminar si no tiene vinculaciones
         await transaction.request()
           .input('idComponente', sql.Int, operacion.id)
           .execute('sp_EliminarComponenteEvaluacion');
@@ -2972,7 +2683,6 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     }
 
-    // 🔥 PASO 3: CREAR COMPONENTES NUEVOS
     for (const operacion of operacionesCrear) {
       try {
         console.log(`🆕 Creando componente: ${operacion.nombreComponente}`);
@@ -2980,7 +2690,7 @@ const guardarComponentesMasivo = async (req, res) => {
         await transaction.request()
           .input('claveMateria', sql.VarChar, claveMateria)
           .input('parcial', sql.Int, parcial)
-          .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
+          .input('vchPeriodo', sql.VarChar, periodoReal)
           .input('claveDocente', sql.VarChar, claveDocente)
           .input('nombreComponente', sql.VarChar, operacion.nombreComponente)
           .input('valorComponente', sql.Decimal(5,2), operacion.valorComponente)
@@ -2999,7 +2709,6 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     }
 
-    // 🔥 PASO 4: MODIFICAR COMPONENTES EXISTENTES
     for (const operacion of operacionesModificar) {
       try {
         console.log(`✏️ Modificando componente ID: ${operacion.id}`);
@@ -3023,13 +2732,11 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     }
 
-    // 🎯 VERIFICAR SI HUBO ERRORES CRÍTICOS
     const erroresTotales = errores.length;
     const operacionesTotales = operaciones.length;
     const operacionesExitosas = componentesCreados + componentesModificados + componentesEliminados;
 
     if (erroresTotales > 0 && operacionesExitosas === 0) {
-      // Todos fallaron
       await transaction.rollback();
       return res.status(500).json({
         error: 'Todas las operaciones fallaron',
@@ -3042,20 +2749,17 @@ const guardarComponentesMasivo = async (req, res) => {
       });
     }
 
-    // 🎉 COMMIT SI TODO ESTÁ BIEN O HAY ÉXITOS PARCIALES
     await transaction.commit();
 
-    // 📊 OBTENER ESTADO FINAL CON NUEVA CONEXIÓN
     const estadoFinalResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
+      .input('vchPeriodo', sql.VarChar, periodoReal)
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_sumaComponentes');
 
     const sumaFinalReal = parseFloat(estadoFinalResult.recordset[0]?.suma_actual || estadoFinalResult.recordset[0]?.suma || 0);
 
-    // 🎯 RESPUESTA EXITOSA
     const respuesta = {
       mensaje: erroresTotales === 0 ? 
         'Todos los componentes fueron guardados exitosamente' :
@@ -3077,17 +2781,14 @@ const guardarComponentesMasivo = async (req, res) => {
         esValido: sumaFinalReal <= 10
       },
 
-      // 👈 INCLUIR PARA DEBUG
       periodoUsado: periodoReal,
       debug: {
         periodoOriginal: periodo,
         periodoResuelto: periodoReal
       },
 
-      // Solo incluir errores si los hay
       ...(erroresTotales > 0 && { errores }),
 
-      // 🎉 FELICITACIÓN SI TODO PERFECTO
       ...(erroresTotales === 0 && Math.abs(sumaFinalReal - 10) < 0.01 && {
         felicitacion: {
           mensaje: '🎉 ¡Perfecto! Parcial configurado con exactamente 10 puntos',
@@ -3107,7 +2808,6 @@ const guardarComponentesMasivo = async (req, res) => {
     res.json(respuesta);
 
   } catch (error) {
-    // 🔥 MANEJO DE ERRORES MEJORADO
     console.error('❌ Error crítico en guardado masivo:', error);
     
     if (transaction) {
@@ -3139,10 +2839,8 @@ const validarOperacionesMasivas = async (req, res) => {
   let pool;
 
   try {
-    // 🔥 CONECTAR AL POOL
     pool = await sql.connect(config);
 
-    // 🔍 OBTENER ESTADO ACTUAL
     const componentesActualesResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
@@ -3152,7 +2850,6 @@ const validarOperacionesMasivas = async (req, res) => {
 
     const componentesActuales = componentesActualesResult.recordset || [];
 
-    // 🧮 SIMULAR OPERACIONES
     const operacionesCrear = operaciones.filter(op => op.tipo === 'crear');
     const operacionesModificar = operaciones.filter(op => op.tipo === 'modificar');
     const operacionesEliminar = operaciones.filter(op => op.tipo === 'eliminar');
@@ -3161,13 +2858,11 @@ const validarOperacionesMasivas = async (req, res) => {
     const advertencias = [];
     const erroresPotenciales = [];
 
-    // Simular suma final
     componentesActuales.forEach(comp => {
       const seElimina = operacionesEliminar.some(op => op.id === comp.id_valor_componente);
       const seModifica = operacionesModificar.find(op => op.id === comp.id_valor_componente);
       
       if (seElimina) {
-        // No sumar, se eliminará
       } else if (seModifica) {
         sumaSimulada += parseFloat(seModifica.valorComponente || 0);
       } else {
@@ -3175,14 +2870,10 @@ const validarOperacionesMasivas = async (req, res) => {
       }
     });
 
-    // Sumar nuevos componentes
     operacionesCrear.forEach(op => {
       sumaSimulada += parseFloat(op.valorComponente || 0);
     });
 
-    // 🔍 VALIDACIONES ESPECÍFICAS
-    
-    // Verificar componentes a eliminar
     for (const operacion of operacionesEliminar) {
       try {
         const vinculaciones = await pool.request()
@@ -3207,7 +2898,6 @@ const validarOperacionesMasivas = async (req, res) => {
       }
     }
 
-    // Verificar nombres duplicados
     const todosLosNombres = [
       ...operacionesCrear.map(op => op.nombreComponente),
       ...operacionesModificar.map(op => op.nombreComponente),
@@ -3231,7 +2921,6 @@ const validarOperacionesMasivas = async (req, res) => {
       });
     }
 
-    // 🎯 RESULTADO DE VALIDACIÓN
     const validacion = {
       esValida: erroresPotenciales.length === 0,
       sumaFinal: parseFloat(sumaSimulada.toFixed(2)),
@@ -3266,23 +2955,18 @@ const validarOperacionesMasivas = async (req, res) => {
     });
   }
 };
-// ===============================================
-// EXPORTS COMPLETOS ACTUALIZADOS Y CORREGIDOS
-// ===============================================
+
 module.exports = {
-  // Funciones básicas del docente
   obtenerDatosDocente,
   obtenerPerfilDocente,
   cambiarContrasenaDocente,
   
-  // Funciones de materias
   obtenerMateriasPorDocente,
   obtenerMateriasCompletas,
   obtenerPeriodoActual,
   obtenerPeriodosDocente,
   obtenerMateriasCompletasPorPeriodo,
   
-  // 🆕 Funciones CRUD de componentes/ponderación
   obtenerComponentesPorMateria,
   crearComponente,
   modificarComponente,
@@ -3295,33 +2979,29 @@ module.exports = {
    guardarComponentesMasivo,
   validarOperacionesMasivas,
   
-  // Funciones de grupos y actividades
   obtenerGruposPorMateriaDocente,
   obtenerListasCotejo,
-  obtenerActividadesPorGrupo, // 🔧 OPTIMIZADA CON ESTADOS V2
-  obtenerEstadisticasGrupo, // 🔧 OPTIMIZADA CON ESTADOS V2
+  obtenerActividadesPorGrupo,
+  obtenerEstadisticasGrupo,
   
-  // 🔧 Funciones de creación de actividades - CORREGIDAS
-  crearActividad, // 🔧 CORREGIDA SIN id_estado_actividad + CON ASIGNACIÓN DE ESTADOS
-  crearActividadCompletaConComponente, // 🔧 COMPLETAMENTE CORREGIDA
+  crearActividad,
+  crearActividadCompletaConComponente,
   
-  // Funciones de manejo de equipos
   obtenerEquiposPorGrupo,
   obtenerAlumnosPorGrupo,
   simularEquiposAleatorios,
   obtenerActividadesConEquiposPorGrupo,
 
-  // 🔧 Funciones de calificación - CORREGIDAS CON ACTUALIZACIÓN DE ESTADOS
   obtenerDatosActividad,
   obtenerCriteriosActividad,
-  obtenerAlumnosParaCalificar, // 🔧 INCLUYE ESTADOS
-  obtenerEquiposParaCalificar, // 🔧 INCLUYE ESTADOS
+  obtenerAlumnosParaCalificar,
+  obtenerEquiposParaCalificar,
   obtenerCalificacionesAlumno,
   obtenerCalificacionesEquipo,
-  guardarCalificacionesAlumno, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
-  guardarCalificacionesEquipo, // 🔧 ACTUALIZA ESTADO A "ENTREGADO"
+  guardarCalificacionesAlumno,
+  guardarCalificacionesEquipo,
   validarParcial, 
-  // Funciones de observaciones
+
   guardarObservacionAlumno,
   guardarObservacionEquipo,
   obtenerObservacionAlumno,
@@ -3329,7 +3009,6 @@ module.exports = {
   obtenerComparativaEquipoIndividual,
   obtenerCalificacionesIntegrantesEquipo,
 
-  // Funciones de procedimientos almacenados
   obtenerConcentradoFinal,
   obtenerCalificacionesActividad,
   obtenerEstadisticasCentroControl
