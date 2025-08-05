@@ -1,7 +1,7 @@
 const { sql, config } = require('../db/sqlConfig');
 
 // ===============================================
-// 🔧 FUNCIÓN ADAPTADA: detectarPeriodoAutomatico CON SP
+// FUNCIÓN: detectarPeriodoAutomatico 
 // ===============================================
 const detectarPeriodoAutomatico = async (pool, matricula) => {
   try {
@@ -92,7 +92,7 @@ const detectarPeriodoAutomatico = async (pool, matricula) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN COMPLETAMENTE CORREGIDA: calcularEstadoDinamico
+// FUNCIÓN: calcularEstadoDinamico
 // ===============================================
 const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal = 'Pendiente') => {
   console.log(`🔍 === CALCULANDO ESTADO DINÁMICO (ZONA HORARIA CORREGIDA) ===`);
@@ -119,10 +119,10 @@ const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal 
     };
   }
 
-  // 🔧 OBTENER HORA ACTUAL EN ZONA HORARIA CORRECTA (México)
+  // OBTENER HORA ACTUAL EN ZONA HORARIA CORRECTA (México)
   const ahora = new Date();
   
-  // 🔧 APLICAR CORRECCIÓN DE ZONA HORARIA PARA MÉXICO (UTC-6)
+  // APLICAR CORRECCIÓN DE ZONA HORARIA PARA MÉXICO (UTC-6)
   // Ajustar según tu zona horaria real
   const offsetMexico = -6; // UTC-6 para zona horaria de México
   const ahoraLocal = new Date(ahora.getTime() + (offsetMexico * 60 * 60 * 1000));
@@ -133,7 +133,7 @@ const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal 
   let fechaLimite;
 
   try {
-    // 🔧 PARSEAR LA FECHA ASUMIENDO QUE VIENE EN ZONA HORARIA LOCAL
+    // PARSEAR LA FECHA ASUMIENDO QUE VIENE EN ZONA HORARIA LOCAL
     if (typeof fechaEntrega === 'string') {
       fechaLimite = new Date(fechaEntrega);
     } else if (fechaEntrega instanceof Date) {
@@ -165,7 +165,7 @@ const calcularEstadoDinamico = (fechaEntrega, tieneCalificacion, estadoOriginal 
 
   console.log(`📅 Fecha límite parseada: ${fechaLimite.toISOString()}`);
   
-  // ✅ CÁLCULO PRECISO DE DIFERENCIA USANDO HORA LOCAL CORREGIDA
+  // ✅ CÁLCULO DE DIFERENCIA USANDO HORA LOCAL CORREGIDA
   const diferenciaMilisegundos = fechaLimite.getTime() - ahoraLocal.getTime();
   const diferenciaMinutos = Math.floor(diferenciaMilisegundos / (1000 * 60));
   const diferenciaHoras = Math.floor(diferenciaMilisegundos / (1000 * 60 * 60));
@@ -290,12 +290,12 @@ const verificarEstadoActividad = (actividad) => {
 };
 
 // ===============================================
-// 🧪 FUNCIÓN DE PRUEBA ESPECÍFICA
+// FUNCIÓN DE PRUEBA ESPECÍFICA
 // ===============================================
 const probarConFechaReal = () => {
   console.log('\n🧪 === PRUEBA CON FECHA REAL ===');
   
-  // Simular la fecha de tu base de datos: 2025-07-18 20:20:00
+  // Simular la fecha de la base de datos: 2025-07-18 20:20:00
   const fechaDB = '2025-07-18T20:20:00.000';
   const fechaBD = new Date(fechaDB);
   
@@ -314,7 +314,7 @@ const probarConFechaReal = () => {
 };
 
 // ===============================================
-// FUNCIONES AUXILIARES PARA CALIFICACIONES REALES ADAPTADAS CON SP
+// FUNCIONES AUXILIARES PARA CALIFICACIONES
 // ===============================================
 
 const obtenerCalificacionRealActividad = async (pool, idActividad, matricula) => {
@@ -356,7 +356,7 @@ const obtenerCriteriosCalificadosReales = async (pool, idActividad, matricula) =
 };
 
 // ===============================================
-// 🔧 FUNCIÓN ADAPTADA: obtenerFechasCuatrimestre CON SP
+// FUNCIÓN: obtenerFechasCuatrimestre 
 // ===============================================
 const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
   try {
@@ -449,7 +449,7 @@ const obtenerFechasCuatrimestre = async (pool, periodo, cuatrimestre) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN CORREGIDA: obtenerDatosAlumno CON SP
+// FUNCIÓN: obtenerDatosAlumno 
 // ===============================================
 const obtenerDatosAlumno = async (req, res) => {
   const { matricula } = req.params;
@@ -559,7 +559,7 @@ const obtenerDatosAlumno = async (req, res) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN ADAPTADA: obtenerActividadesPorAlumno CON SP
+// FUNCIÓN: obtenerActividadesPorAlumno 
 // ===============================================
 const obtenerActividadesPorAlumno = async (req, res) => {
   const { matricula, materia } = req.params;
@@ -574,7 +574,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // 🔧 CONSULTA USANDO SP
+    // CONSULTA USANDO 
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('materia', sql.VarChar, materia)
@@ -621,7 +621,7 @@ const obtenerActividadesPorAlumno = async (req, res) => {
       };
     });
 
-    // 🔧 ORDENAMIENTO MEJORADO
+    // ORDENAMIENTO MEJORADO
     actividadesConEstadosDinamicos.sort((a, b) => {
       // Prioridad 1: Actividades finales no calificadas al inicio
       if (a.es_actividad_final && !b.es_actividad_final && !a.tiene_calificacion) return -1;
@@ -686,7 +686,7 @@ const obtenerDetalleActividad = async (req, res) => {
     // PASO 3: Verificar calificación
     const calificacionReal = await obtenerCalificacionRealActividad(pool, idActividad, matricula);
     
-    // 🔧 PASO 3.5: FIX OBSERVACIONES - Consulta directa para actividades calificadas
+    // PASO 3.5: FIX OBSERVACIONES - Consulta directa para actividades calificadas
     let observacionesCorrectas = actividad.observaciones;
     
     if (calificacionReal !== null) {
@@ -804,7 +804,7 @@ const obtenerDetalleActividad = async (req, res) => {
       modalidad_nombre: actividad.modalidad_nombre,
       rubrica: rubrica,
       
-      // 🔧 USAR OBSERVACIONES CORREGIDAS
+      // USAR OBSERVACIONES CORREGIDAS
       observaciones: observacionesCorrectas,
       
       tiene_calificacion: calificacionReal !== null,
@@ -851,7 +851,7 @@ const obtenerDetalleActividad = async (req, res) => {
 
 
 // ===============================================
-// 🔧 FUNCIÓN ADAPTADA: obtenerActividadesEntregadas CON SP
+// FUNCIÓN: obtenerActividadesEntregadas
 // ===============================================
 const obtenerActividadesEntregadas = async (req, res) => {
   const { matricula } = req.params;
@@ -917,7 +917,7 @@ const obtenerActividadesEntregadas = async (req, res) => {
 };
 
 // ===============================================
-// 🔧 ADAPTACIÓN COMPLETA DE LA FUNCIÓN obtenerActividadEntregada CON SP
+// FUNCIÓN obtenerActividadEntregada 
 // ===============================================
 const obtenerActividadEntregada = async (req, res) => {
   const { matricula, idActividad } = req.params;
@@ -938,7 +938,7 @@ const obtenerActividadEntregada = async (req, res) => {
       });
     }
 
-    // 🔧 CONSULTA USANDO SP
+    // CONSULTA USANDO SP
     const actividadResult = await pool.request()
       .input('idActividad', sql.Int, idActividad)
       .input('matricula', sql.VarChar, matricula)
@@ -1023,7 +1023,7 @@ const obtenerActividadEntregada = async (req, res) => {
       console.log(`📊 Ponderación calculada: ${calificacionObtenida}/10 × ${valorComponente} pts = ${ponderacionInfo.contribucion_puntos} pts`);
     }
 
-    // 🔧 RESPUESTA FINAL CON INFORMACIÓN DE PONDERACIÓN
+    // RESPUESTA FINAL CON INFORMACIÓN DE PONDERACIÓN
     const response = {
       id_actividad: actividadData.id_actividad,
       titulo: actividadData.titulo,
@@ -1068,7 +1068,7 @@ const obtenerActividadEntregada = async (req, res) => {
 };
 
 // ===============================================
-// 🔧 FUNCIÓN ADAPTADA: obtenerCalificacionesHistoricas CON SP
+// FUNCIÓN: obtenerCalificacionesHistoricas  
 // ===============================================
 const obtenerCalificacionesHistoricas = async (req, res) => {
   const { matricula } = req.params;
@@ -1083,7 +1083,7 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // 🔧 CONSULTA MEJORADA: INCLUIR INFORMACIÓN COMPLETA DE PONDERACIÓN USANDO SP
+    // CONSULTA MEJORADA: INCLUIR INFORMACIÓN COMPLETA DE PONDERACIÓN USANDO SP
     const result = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('todos_periodos', sql.Bit, todos_periodos === 'true' ? 1 : 0)
@@ -1095,7 +1095,7 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
       return res.json([]);
     }
 
-    // 🔧 AGRUPAR Y CALCULAR PROMEDIOS CON PONDERACIÓN COMPLETA
+    // AGRUPAR Y CALCULAR PROMEDIOS CON PONDERACIÓN COMPLETA
     const calificacionesPorPeriodo = {};
     
     result.recordset.forEach(act => {
@@ -1142,13 +1142,13 @@ const obtenerCalificacionesHistoricas = async (req, res) => {
       });
     });
 
-    // 🔧 CALCULAR PROMEDIOS CON PONDERACIÓN REAL
+    // CALCULAR PROMEDIOS CON PONDERACIÓN REAL
     const calificaciones = Object.values(calificacionesPorPeriodo).map(periodo => {
       const materiasList = Object.values(periodo.materias);
       
       materiasList.forEach(materia => {
         if (materia.actividades.length > 0) {
-          // 🔧 CALCULAR PROMEDIO PONDERADO
+          // CALCULAR PROMEDIO PONDERADO
           let sumaCalificacionesPonderadas = 0;
           let sumaPonderaciones = 0;
           
@@ -1227,7 +1227,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
     const periodoInfo = await detectarPeriodoAutomatico(pool, matricula);
     console.log(`📅 Usando período detectado: ${periodoInfo.periodo}`);
 
-    // 🔧 PRIMERA CONSULTA: OBTENER **TODAS** LAS ACTIVIDADES QUE EXISTEN USANDO SP
+    // PRIMERA CONSULTA: OBTENER **TODAS** LAS ACTIVIDADES QUE EXISTEN  
     const todasLasActividades = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .input('todos_periodos', sql.Bit, todos_periodos === 'true' ? 1 : 0)
@@ -1235,14 +1235,14 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
 
     console.log(`📊 TODAS las actividades encontradas: ${todasLasActividades.recordset.length}`);
 
-    // 🔧 SEGUNDA CONSULTA: OBTENER **SOLO** LAS CALIFICACIONES EXISTENTES USANDO SP
+    // SEGUNDA CONSULTA: OBTENER **SOLO** LAS CALIFICACIONES EXISTENTES  
     const calificacionesExistentes = await pool.request()
       .input('matricula', sql.VarChar, matricula)
       .execute('sp_ObtenerCalificacionesExistentes');
 
     console.log(`📊 Calificaciones existentes: ${calificacionesExistentes.recordset.length}`);
 
-    // 🔧 MAPEAR CALIFICACIONES A LAS ACTIVIDADES
+    // MAPEAR CALIFICACIONES A LAS ACTIVIDADES
     const mapaCalificaciones = {};
     calificacionesExistentes.recordset.forEach(cal => {
       mapaCalificaciones[cal.id_actividad] = {
@@ -1252,7 +1252,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
       };
     });
 
-    // 🔧 FUNCIÓN PARA EVALUAR SI UNA ACTIVIDAD ESTÁ VENCIDA
+    // FUNCIÓN PARA EVALUAR SI UNA ACTIVIDAD ESTÁ VENCIDA
     const evaluarEstadoActividad = (fecha_entrega_raw, tiene_calificacion) => {
       if (tiene_calificacion) {
         return {
@@ -1272,7 +1272,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
         };
       }
 
-      // Calcular si está vencida (usando la misma lógica que tienes en calcularEstadoDinamico)
+      // Calcular si está vencida (usando la misma lógica que en calcularEstadoDinamico)
       const ahora = new Date();
       const offsetMexico = -6; // UTC-6 para zona horaria de México
       const ahoraLocal = new Date(ahora.getTime() + (offsetMexico * 60 * 60 * 1000));
@@ -1319,7 +1319,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
       }
     };
 
-    // 🔧 COMBINAR ACTIVIDADES CON CALIFICACIONES Y EVALUACIÓN DE VENCIMIENTO
+    // COMBINAR ACTIVIDADES CON CALIFICACIONES Y EVALUACIÓN DE VENCIMIENTO
     const actividadesCompletas = todasLasActividades.recordset.map(actividad => {
       const calificacion = mapaCalificaciones[actividad.id_actividad];
       const evaluacion = evaluarEstadoActividad(actividad.fecha_entrega_raw, !!calificacion);
@@ -1357,7 +1357,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
       return res.json([]);
     }
 
-    // 🔧 PROCESAMIENTO: AGRUPAR Y CALCULAR PROMEDIOS PONDERADOS INTELIGENTES
+    // PROCESAMIENTO: AGRUPAR Y CALCULAR PROMEDIOS PONDERADOS INTELIGENTES
     const periodosProcesados = {};
     
     actividadesCompletas.forEach(actividad => {
@@ -1549,7 +1549,7 @@ const obtenerCalificacionesHistoricasPorParciales = async (req, res) => {
 };
 
 // ===============================================
-// FUNCIÓN ADAPTADA: cambiarContrasena CON SP
+// FUNCIÓN: cambiarContrasena  
 // ===============================================
 const cambiarContrasena = async (req, res) => {
   const { matricula } = req.params;
@@ -1588,7 +1588,7 @@ const cambiarContrasena = async (req, res) => {
 };
 
 // ===============================================
-// 🧪 FUNCIÓN DE PRUEBA PARA FECHAS
+// FUNCIÓN DE PRUEBA PARA FECHAS
 // ===============================================
 const probarCalculoEstado = () => {
   console.log('\n🧪 === PRUEBA DE CÁLCULO DE ESTADO ===');
