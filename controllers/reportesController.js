@@ -228,13 +228,12 @@ const obtenerDatosConcentradoCompleto = async (filtros) => {
 // 📄 FUNCIÓN DE EXPORTACIÓN A EXCEL - LIMPIA Y ORGANIZADA
 // ===============================================
 
-// ✅ Generar reporte completo en Excel (Limpio y organizado)
+// ✅ Generar reporte Excel CON COLORES CORREGIDOS (sin negro)
 const generarReporteExcel = async (req, res) => {
   try {
     const filtros = req.body;
     console.log(`📊 Generando reporte Excel con filtros:`, filtros);
 
-    // ✅ Obtener datos del SP_ConcentradoCompleto
     const datos = await obtenerDatosConcentradoCompleto(filtros);
     
     if (!datos || datos.length === 0) {
@@ -243,11 +242,9 @@ const generarReporteExcel = async (req, res) => {
       });
     }
     
-    // Crear workbook
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Reporte Completo');
 
-    // Configurar metadatos del archivo
     workbook.creator = 'Sistema UTHH';
     workbook.created = new Date();
     workbook.modified = new Date();
@@ -257,17 +254,15 @@ const generarReporteExcel = async (req, res) => {
     
     worksheet.mergeCells('A1:H1');
     worksheet.getCell('A1').value = titulo;
-    worksheet.getCell('A1').font = { size: 18, bold: true, color: { argb: 'FF009944' } };
+    worksheet.getCell('A1').font = { size: 18, bold: true, color: { argb: 'FF1B4F72' } };
     worksheet.getCell('A1').alignment = { horizontal: 'center' };
 
-    // ✅ INFORMACIÓN DEL REPORTE (NUEVO APARTADO)
     let filaActual = 3;
     
     worksheet.getCell(`A${filaActual}`).value = 'Información del Reporte:';
-    worksheet.getCell(`A${filaActual}`).font = { size: 14, bold: true, color: { argb: 'FF2E8B57' } };
+    worksheet.getCell(`A${filaActual}`).font = { size: 14, bold: true, color: { argb: 'FF1B4F72' } };
     filaActual++;
 
-    // Información en dos columnas
     const infoReporte = [
       ['Materia:', filtros.materia, 'Docente:', datos[0]?.Docente || 'N/A'],
       ['Parcial:', `Parcial ${filtros.parcial}`, 'Grupo:', `Grupo ${filtros.grupo}`],
@@ -282,7 +277,6 @@ const generarReporteExcel = async (req, res) => {
     ];
 
     infoReporte.forEach((fila, index) => {
-      // Columna A y B
       if (fila[0]) {
         worksheet.getCell(`A${filaActual + index}`).value = fila[0];
         worksheet.getCell(`A${filaActual + index}`).font = { bold: true };
@@ -291,7 +285,6 @@ const generarReporteExcel = async (req, res) => {
         worksheet.getCell(`B${filaActual + index}`).value = fila[1];
       }
       
-      // Columna D y E (dejamos C vacía para separación)
       if (fila[2]) {
         worksheet.getCell(`D${filaActual + index}`).value = fila[2];
         worksheet.getCell(`D${filaActual + index}`).font = { bold: true };
@@ -303,11 +296,10 @@ const generarReporteExcel = async (req, res) => {
 
     filaActual += infoReporte.length + 1;
 
-    // ✅ ESTADÍSTICAS GENERALES (SIN PROMEDIO, CRITERIO 7+)
     const stats = calcularEstadisticasLimpias(datos);
     
     worksheet.getCell(`A${filaActual}`).value = 'Estadísticas Generales:';
-    worksheet.getCell(`A${filaActual}`).font = { size: 14, bold: true, color: { argb: 'FF2E8B57' } };
+    worksheet.getCell(`A${filaActual}`).font = { size: 14, bold: true, color: { argb: 'FF1B4F72' } };
     filaActual++;
 
     const estadisticas = [
@@ -317,12 +309,10 @@ const generarReporteExcel = async (req, res) => {
     ];
 
     estadisticas.forEach((fila, index) => {
-      // Columna A y B
       worksheet.getCell(`A${filaActual + index}`).value = fila[0];
       worksheet.getCell(`A${filaActual + index}`).font = { bold: true };
       worksheet.getCell(`B${filaActual + index}`).value = fila[1];
       
-      // Columna D y E
       if (fila[2]) {
         worksheet.getCell(`D${filaActual + index}`).value = fila[2];
         worksheet.getCell(`D${filaActual + index}`).font = { bold: true };
@@ -334,15 +324,44 @@ const generarReporteExcel = async (req, res) => {
 
     filaActual += estadisticas.length + 2;
 
-    // ✅ TABLA PRINCIPAL (LIMPIA - SIN COLUMNAS REPETITIVAS)
+    // ✅ FUNCIÓN PARA OBTENER VALOR CORRECTO (INCLUYE 0s)
+    function obtenerValorParaExcel(valor, columna) {
+      if (valor === null || 
+          valor === undefined || 
+          valor === '' || 
+          valor === 'NULL' ||
+          valor === 'null' ||
+          (typeof valor === 'string' && valor.trim() === '') ||
+          (typeof valor === 'number' && isNaN(valor))) {
+        
+        if (!['No.', 'Matricula', 'Nombre_Alumno'].includes(columna)) {
+          return 0;
+        } else {
+          return valor;
+        }
+      }
+      
+      if (typeof valor === 'number') {
+        return valor;
+      }
+      
+      if (!['No.', 'Matricula', 'Nombre_Alumno'].includes(columna)) {
+        const numeroVal = parseFloat(valor);
+        if (!isNaN(numeroVal)) {
+          return numeroVal;
+        } else if (typeof valor === 'string' && valor.toLowerCase() === 'null') {
+          return 0;
+        }
+      }
+      
+      return valor;
+    }
+
     if (datos.length > 0) {
       const todasLasColumnas = Object.keys(datos[0]);
-      
-      // ✅ FILTRAR COLUMNAS - Quitar las repetitivas
       const columnasAExcluir = ['Grupo', 'Docente', 'Nombre_materia', 'Periodo', 'Parcial', 'Cuatrimestre'];
       const columnasLimpias = todasLasColumnas.filter(col => !columnasAExcluir.includes(col));
       
-      // ✅ CREAR MAPEO DE ACTIVIDADES A NÚMEROS
       const actividades = columnasLimpias.filter(col => 
         col.includes(' - ') || col.startsWith('Prom_') || col.startsWith('CalPond_')
       );
@@ -351,22 +370,22 @@ const generarReporteExcel = async (req, res) => {
       const referenciasActividades = [];
       let numeroActividad = 1;
       
-      // ✅ COLORES POR COMPONENTE
+      // ✅ PALETA DE COLORES PROFESIONAL Y BONITA
       const coloresComponentes = [
-        'FFE3F2FD', // Azul claro
-        'FFF3E5F5', // Morado claro  
-        'FFE8F5E8', // Verde claro
-        'FFFFF3E0', // Naranja claro
-        'FFF1F8E9', // Lima claro
-        'FFEDE7F6', // Violeta claro
-        'FFE0F2F1', // Teal claro
+        'FFE3F2FD', // Azul cielo claro - profesional
+        'FFE8F5E8', // Verde menta claro - fresco
+        'FFFFF3E0', // Naranja melocotón - cálido
+        'FFE0F7FA', // Turquesa claro - moderno
+        'FFF9FFF9', // Verde muy claro - suave
+        'FFF0F8FF', // Azul Alice - elegante
+        'FFFAF0E6', // Lino - neutro cálido
+        'FFE6F3FF', // Azul powder - suave
       ];
       
       let componenteActual = '';
       let indiceColor = 0;
       
       actividades.forEach(actividad => {
-        // Detectar cambio de componente
         let componente = '';
         if (actividad.startsWith('Prom_')) {
           componente = actividad.replace('Prom_', '').split('_')[0];
@@ -396,14 +415,13 @@ const generarReporteExcel = async (req, res) => {
         numeroActividad++;
       });
       
-      console.log(`📋 Columnas en la tabla: ${columnasLimpias.length} (eliminadas ${columnasAExcluir.length} repetitivas)`);
+      console.log(`📋 Columnas en la tabla: ${columnasLimpias.length}`);
       console.log(`🔢 Actividades mapeadas: ${actividades.length}`);
 
-      // ✅ ENCABEZADOS DE LA TABLA (CON NÚMEROS Y NOMBRES SIMPLIFICADOS)
+      // ✅ ENCABEZADOS DE LA TABLA
       columnasLimpias.forEach((header, index) => {
         const cell = worksheet.getCell(filaActual, index + 1);
         
-        // ✅ CAMBIAR NOMBRES DE HEADERS
         let headerMostrar = header;
         if (header === 'Nombre_Alumno') {
           headerMostrar = 'Nombre';
@@ -414,12 +432,20 @@ const generarReporteExcel = async (req, res) => {
         cell.value = headerMostrar;
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         
-        // ✅ COLOR DE FONDO SEGÚN COMPONENTE
-        let colorFondo = 'FF009944'; // Verde por defecto
+        // ✅ COLOR DE FONDO MODERNO PARA HEADERS
+        let colorFondo = 'FF1B4F72'; // Azul profesional oscuro
         if (mapeoActividades[header]) {
-          colorFondo = mapeoActividades[header].color.replace('FF', 'FF');
-          // Para headers, usar versión más oscura
-          colorFondo = colorFondo.replace('FF', 'CC');
+          // ✅ USAR VERSIÓN MÁS OSCURA DEL COLOR BASE
+          const colorBase = mapeoActividades[header].color;
+          // Convertir a versión más oscura para mejor contraste
+          if (colorBase.includes('E3F2FD')) colorFondo = 'FF1976D2'; // Azul
+          else if (colorBase.includes('E8F5E8')) colorFondo = 'FF388E3C'; // Verde
+          else if (colorBase.includes('FFF3E0')) colorFondo = 'FFF57C00'; // Naranja
+          else if (colorBase.includes('E0F7FA')) colorFondo = 'FF00838F'; // Turquesa
+          else if (colorBase.includes('F9FFF9')) colorFondo = 'FF43A047'; // Verde claro
+          else if (colorBase.includes('F0F8FF')) colorFondo = 'FF1565C0'; // Azul Alice
+          else if (colorBase.includes('FAF0E6')) colorFondo = 'FF8D6E63'; // Lino
+          else colorFondo = 'FF3949AB'; // Azul powder
         }
         
         cell.fill = {
@@ -438,14 +464,15 @@ const generarReporteExcel = async (req, res) => {
 
       filaActual++;
 
-      // ✅ FILAS DE DATOS (SOLO COLUMNAS LIMPIAS)
+      // ✅ FILAS DE DATOS
       datos.forEach((fila, filaIndex) => {
         columnasLimpias.forEach((columna, colIndex) => {
-          const valor = fila[columna];
+          const valorOriginal = fila[columna];
           const cell = worksheet.getCell(filaActual + filaIndex, colIndex + 1);
-          cell.value = valor;
           
-          // Borderes para todas las celdas
+          const valorMostrar = obtenerValorParaExcel(valorOriginal, columna);
+          cell.value = valorMostrar;
+          
           cell.border = {
             top: { style: 'thin' },
             left: { style: 'thin' },
@@ -454,44 +481,51 @@ const generarReporteExcel = async (req, res) => {
           };
           
           // ✅ COLOREAR SEGÚN TIPO DE COLUMNA
-          // Calificación final (criterio 7+)
           if (columna === 'Calificacion_Final') {
-            const calificacion = parseFloat(valor) || 0;
+            const calificacion = parseFloat(valorMostrar) || 0;
             if (calificacion >= 8) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD4EDDA' } }; // Verde fuerte
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1F2EB' } }; // Verde éxito suave
             } else if (calificacion >= 7) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F5E8' } }; // Verde claro
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEAF4F4' } }; // Verde muy claro
             } else if (calificacion >= 5) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } }; // Amarillo
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCF3CF' } }; // Amarillo suave
             } else {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8D7DA' } }; // Rojo
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDEDEC' } }; // Rosa suave (muy claro)
             }
             cell.font = { bold: true };
+            
+            if (valorMostrar === 0) {
+              cell.font = { bold: true, italic: true, color: { argb: 'FF5A6C7D' } };
+            }
           }
-          // ✅ ACTIVIDADES/COMPONENTES CON COLORES POR GRUPO
-          else if (mapeoActividades[columna] && typeof valor === 'number') {
-            // Color base del componente
+          else if (mapeoActividades[columna] && typeof valorMostrar === 'number') {
             let colorBase = mapeoActividades[columna].color;
             
-            // Intensidad según calificación
-            if (valor >= 8) {
+            if (valorMostrar === 0) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF2F7' } }; // Gris azulado muy claro
+              cell.font = { italic: true, color: { argb: 'FF5A6C7D' } }; // Gris azulado más suave
+            }
+            else if (valorMostrar >= 8) {
               cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase } };
-            } else if (valor >= 7) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('FF', 'FF').replace(/(.{2})(.{6})/, '$1E8$2') } };
-            } else if (valor >= 5) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('FF', 'FF').replace(/(.{2})(.{6})/, '$1D0$2') } };
-            } else if (valor > 0) {
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('FF', 'FF').replace(/(.{2})(.{6})/, '$1C0$2') } };
+            } else if (valorMostrar >= 7) {
+              // ✅ GRADIENTES MÁS SUAVES
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('CC', 'E6') } };
+            } else if (valorMostrar >= 5) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('CC', 'F0') } };
+            } else if (valorMostrar > 0) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colorBase.replace('CC', 'F5') } };
             }
             
-            // Negrita para promedios y ponderadas
             if (columna.startsWith('Prom_') || columna.startsWith('CalPond_')) {
-              cell.font = { bold: true };
+              if (valorMostrar === 0) {
+                cell.font = { bold: true, italic: true, color: { argb: 'FF5A6C7D' } };
+              } else {
+                cell.font = { bold: true };
+              }
             }
           }
-          // Información básica del alumno
           else if (['No.', 'Matricula', 'Nombre_Alumno'].includes(columna)) {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F9FA' } }; // Gris muy claro
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFB' } }; // Gris muy claro moderno
             if (columna === 'No.') {
               cell.alignment = { horizontal: 'center' };
             }
@@ -502,7 +536,7 @@ const generarReporteExcel = async (req, res) => {
         });
       });
 
-      // ✅ AUTO-AJUSTAR ANCHOS DE COLUMNA
+      // ✅ AUTO-AJUSTAR ANCHOS
       worksheet.columns.forEach((column, index) => {
         const headerName = columnasLimpias[index];
         
@@ -511,24 +545,22 @@ const generarReporteExcel = async (req, res) => {
         } else if (headerName === 'Matricula') {
           column.width = 14;
         } else if (headerName === 'Nombre_Alumno') {
-          column.width = 35; // ✅ MÁS ESPACIO PARA NOMBRES
+          column.width = 35;
         } else if (headerName === 'Calificacion_Final') {
           column.width = 14;
         } else if (mapeoActividades[headerName]) {
-          column.width = 8; // ✅ COLUMNAS DE NÚMEROS MÁS COMPACTAS
+          column.width = 8;
         } else {
           column.width = 11;
         }
       });
       
-      // ✅ TABLA DE REFERENCIA (NUEVA)
+      // ✅ TABLA DE REFERENCIA CORREGIDA (SIN NEGRO)
       const filaReferencia = filaActual + datos.length + 3;
       
-      // Título de la tabla de referencia
       worksheet.getCell(`A${filaReferencia}`).value = 'Referencias de Actividades:';
-      worksheet.getCell(`A${filaReferencia}`).font = { size: 14, bold: true, color: { argb: 'FF2E8B57' } };
+      worksheet.getCell(`A${filaReferencia}`).font = { size: 14, bold: true, color: { argb: 'FF1B4F72' } };
       
-      // Headers de la tabla de referencia
       const headersRef = ['No.', 'Descripción de la Actividad'];
       headersRef.forEach((header, index) => {
         const cell = worksheet.getCell(filaReferencia + 2, index + 1);
@@ -537,7 +569,7 @@ const generarReporteExcel = async (req, res) => {
         cell.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: 'FF2E8B57' }
+          fgColor: { argb: 'FF1B4F72' } // Azul profesional para combinar
         };
         cell.border = {
           top: { style: 'thin' },
@@ -548,19 +580,19 @@ const generarReporteExcel = async (req, res) => {
         cell.alignment = { horizontal: 'center' };
       });
       
-      // ✅ FILAS DE LA TABLA DE REFERENCIA
+      // ✅ FILAS DE REFERENCIA CON COLORES CORREGIDOS
       referenciasActividades.forEach((ref, index) => {
         const fila = filaReferencia + 3 + index;
         
-        // Número
+        // ✅ NÚMERO CON COLOR PROFESIONAL
         const cellNumero = worksheet.getCell(fila, 1);
         cellNumero.value = ref.numero;
         cellNumero.alignment = { horizontal: 'center' };
-        cellNumero.font = { bold: true };
+        cellNumero.font = { bold: true, color: { argb: 'FF2C3E50' } }; // ✅ TEXTO GRIS OSCURO PROFESIONAL
         cellNumero.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: ref.color }
+          fgColor: { argb: ref.color } // ✅ FONDO CON COLOR SUAVE
         };
         cellNumero.border = {
           top: { style: 'thin' },
@@ -569,13 +601,14 @@ const generarReporteExcel = async (req, res) => {
           right: { style: 'thin' }
         };
         
-        // Descripción
+        // ✅ DESCRIPCIÓN CON COLOR SUAVE Y BONITO
         const cellDesc = worksheet.getCell(fila, 2);
         cellDesc.value = ref.nombre;
+        cellDesc.font = { color: { argb: 'FF2C3E50' } }; // ✅ TEXTO GRIS OSCURO PROFESIONAL
         cellDesc.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: ref.color.replace('FF', 'FF').replace(/(.{2})(.{6})/, '$1F8$2') } // Más claro
+          fgColor: { argb: ref.color.replace('E3', 'F7').replace('E8', 'F9').replace('FF', 'F5') } // ✅ AÚN MÁS SUAVE
         };
         cellDesc.border = {
           top: { style: 'thin' },
@@ -585,20 +618,17 @@ const generarReporteExcel = async (req, res) => {
         };
       });
       
-      // Ajustar anchos de la tabla de referencia
       worksheet.getColumn(1).width = Math.max(worksheet.getColumn(1).width || 0, 6);
       worksheet.getColumn(2).width = Math.max(worksheet.getColumn(2).width || 0, 50);
     }
 
-    // ✅ CONFIGURAR HEADERS PARA DESCARGA
     const filename = `Reporte_Limpio_${filtros.materia.replace(/\s+/g, '_')}_P${filtros.parcial}_G${filtros.grupo}_${Date.now()}.xlsx`;
     
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Cache-Control', 'no-cache');
 
-    // ✅ STREAM DIRECTO
-    console.log(`📁 Enviando archivo Excel limpio: ${filename}`);
+    console.log(`📁 Enviando archivo Excel con colores corregidos: ${filename}`);
     await workbook.xlsx.write(res);
     res.end();
 
@@ -610,18 +640,17 @@ const generarReporteExcel = async (req, res) => {
     });
   }
 };
-
 // ===============================================
-// 📊 FUNCIÓN DE EXPORTACIÓN A PDF - LIMPIA Y ORGANIZADA
+// 📊 FUNCIÓN DE EXPORTACIÓN A PDF - SIMPLE SIN GRÁFICOS
 // ===============================================
 
-// ✅ Generar reporte completo en PDF (Limpio y organizado como Excel)
+// ✅ Generar reporte PDF SIMPLE (sin gráficos, con valores 0)
 const generarReportePDF = async (req, res) => {
   let browser = null;
   
   try {
     const filtros = req.body;
-    console.log(`📊 Generando reporte PDF:`, filtros);
+    console.log(`📊 Generando reporte PDF simple:`, filtros);
 
     // ✅ Obtener datos del SP_ConcentradoCompleto
     const datos = await obtenerDatosConcentradoCompleto(filtros);
@@ -635,22 +664,24 @@ const generarReportePDF = async (req, res) => {
     // ✅ USAR ESTADÍSTICAS LIMPIAS (criterio 7+)
     const stats = calcularEstadisticasLimpias(datos);
 
-    // ✅ Generar HTML con la misma lógica del Excel
+    // ✅ Generar HTML SIMPLE (sin gráficos)
     const htmlContent = generarHTMLLimpio(datos, filtros, stats);
 
-    // Configurar Puppeteer
+    // ✅ CONFIGURAR PUPPETEER SIMPLE
     browser = await puppeteer.launch({
       headless: 'new',
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     
     const page = await browser.newPage();
+    
+    // ✅ CARGAR CONTENIDO HTML SIN ESPERAR GRÁFICOS
     await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
 
-    // Generar PDF
+    // ✅ GENERAR PDF INMEDIATAMENTE
     const pdfBuffer = await page.pdf({
       format: 'A4',
-      landscape: true, // Horizontal para ver mejor las columnas
+      landscape: true,
       margin: {
         top: '15mm',
         right: '10mm',
@@ -663,14 +694,14 @@ const generarReportePDF = async (req, res) => {
     await browser.close();
 
     // ✅ CONFIGURAR HEADERS PARA DESCARGA
-    const filename = `Reporte_Limpio_${filtros.materia.replace(/\s+/g, '_')}_P${filtros.parcial}_G${filtros.grupo}_${Date.now()}.pdf`;
+    const filename = `Reporte_${filtros.materia.replace(/\s+/g, '_')}_P${filtros.parcial}_G${filtros.grupo}_${Date.now()}.pdf`;
     
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Cache-Control', 'no-cache');
 
     // ✅ STREAM DIRECTO
-    console.log(`📁 Enviando archivo PDF limpio: ${filename}`);
+    console.log(`📁 Enviando archivo PDF simple: ${filename}`);
     res.send(pdfBuffer);
 
   } catch (error) {
@@ -684,12 +715,13 @@ const generarReportePDF = async (req, res) => {
 };
 
 // ===============================================
-// 🎨 FUNCIÓN PARA GENERAR HTML LIMPIO (NUEVA - IGUAL QUE EXCEL)
+// 🎨 FUNCIÓN PARA GENERAR HTML SIMPLE - SIN GRÁFICOS, CON VALORES 0
 // ===============================================
 
-// ✅ Generar HTML para reporte limpio con números y tabla de referencias
+// ✅ Generar HTML simple para PDF (sin gráficos, con valores 0)
+// ✅ FUNCIÓN HTML MEJORADA - GARANTIZA QUE APAREZCAN LOS 0s
 const generarHTMLLimpio = (datos, filtros, stats) => {
-  // ✅ CREAR MAPEO DE ACTIVIDADES A NÚMEROS (IGUAL QUE EXCEL)
+  // ✅ CREAR MAPEO DE ACTIVIDADES A NÚMEROS
   const todasLasColumnas = Object.keys(datos[0]);
   const columnasAExcluir = ['Grupo', 'Docente', 'Nombre_materia', 'Periodo', 'Parcial', 'Cuatrimestre'];
   const columnasLimpias = todasLasColumnas.filter(col => !columnasAExcluir.includes(col));
@@ -702,22 +734,15 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
   const referenciasActividades = [];
   let numeroActividad = 1;
   
-  // ✅ COLORES POR COMPONENTE (IGUALES QUE EXCEL)
+  // ✅ COLORES POR COMPONENTE
   const coloresComponentes = [
-    '#E3F2FD', // Azul claro
-    '#F3E5F5', // Morado claro  
-    '#E8F5E8', // Verde claro
-    '#FFF3E0', // Naranja claro
-    '#F1F8E9', // Lima claro
-    '#EDE7F6', // Violeta claro
-    '#E0F2F1', // Teal claro
+    '#E3F2FD', '#F3E5F5', '#E8F5E8', '#FFF3E0', '#F1F8E9', '#EDE7F6', '#E0F2F1'
   ];
   
   let componenteActual = '';
   let indiceColor = 0;
   
   actividades.forEach(actividad => {
-    // Detectar cambio de componente
     let componente = '';
     if (actividad.startsWith('Prom_')) {
       componente = actividad.replace('Prom_', '').split('_')[0];
@@ -747,32 +772,12 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
     numeroActividad++;
   });
 
-  // Preparar datos para gráfico de pastel (criterio 7+)
-  const datosGrafico = {
-    aprobados: parseInt(stats.aprobados),
-    reprobados: parseInt(stats.reprobados)
-  };
-
-  // Preparar datos para histograma de calificaciones
-  const calificaciones = datos.map(alumno => parseFloat(alumno['Calificacion_Final']) || 0);
-  const rangos = ['0-3', '3-5', '5-7', '7-8', '8-10'];
-  const conteoRangos = [0, 0, 0, 0, 0];
-  
-  calificaciones.forEach(cal => {
-    if (cal >= 0 && cal < 3) conteoRangos[0]++;
-    else if (cal >= 3 && cal < 5) conteoRangos[1]++;
-    else if (cal >= 5 && cal < 7) conteoRangos[2]++;
-    else if (cal >= 7 && cal < 8) conteoRangos[3]++;
-    else if (cal >= 8 && cal <= 10) conteoRangos[4]++;
-  });
-
   return `
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Reporte Limpio</title>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <title>Reporte Simple</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 10px; font-size: 9px; }
             .header { text-align: center; margin-bottom: 15px; }
@@ -805,18 +810,6 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
             }
             .stat-number { font-size: 16px; font-weight: bold; }
             .stat-label { font-size: 8px; opacity: 0.9; }
-            
-            .charts-section { margin: 15px 0; }
-            .chart-container { 
-                width: 48%; 
-                height: 200px; 
-                display: inline-block; 
-                margin: 5px 1%; 
-                background: white; 
-                border-radius: 6px; 
-                padding: 10px; 
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            }
             
             .table-container { margin: 15px 0; }
             table { 
@@ -874,6 +867,7 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
             .aprobado { color: #27ae60; font-weight: bold; }
             .reprobado { color: #e74c3c; font-weight: bold; }
             .regular { color: #f39c12; font-weight: bold; }
+            .valor-cero { color: #6c757d; font-style: italic; }
             
             .footer { 
                 text-align: center; 
@@ -888,7 +882,7 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
     </head>
     <body>
         <div class="header">
-            <div class="title">📊 Reporte Completo de Calificaciones</div>
+            <div class="title">📊 Reporte de Calificaciones</div>
             <div class="generated">Generado: ${new Date().toLocaleString('es-MX')}</div>
         </div>
 
@@ -928,15 +922,6 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
             </div>
         </div>
 
-        <div class="charts-section">
-            <div class="chart-container">
-                <canvas id="pieChart"></canvas>
-            </div>
-            <div class="chart-container">
-                <canvas id="barChart"></canvas>
-            </div>
-        </div>
-
         <div class="table-container">
             <table>
                 <thead>
@@ -952,7 +937,7 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
                           let colorFondo = '#009944';
                           if (mapeoActividades[col]) {
                             colorFondo = mapeoActividades[col].color.replace('#', '').slice(0, 6);
-                            colorFondo = '#' + colorFondo.replace(/(.{2})(.{4})/, '99$2'); // Más oscuro para header
+                            colorFondo = '#' + colorFondo.replace(/(.{2})(.{4})/, '99$2');
                           }
                           
                           return `<th style="background-color: ${colorFondo};">${headerMostrar}</th>`;
@@ -967,31 +952,71 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
                                 let className = '';
                                 let estilo = '';
                                 
-                                // Clasificar columnas
+                                // ✅ FUNCIÓN MEJORADA PARA DETECTAR VALORES VACÍOS Y MOSTRAR 0
+                                function obtenerValorMostrar(val) {
+                                    // Verificar si es null, undefined, string vacía, o NaN
+                                    if (val === null || 
+                                        val === undefined || 
+                                        val === '' || 
+                                        val === 'NULL' ||
+                                        val === 'null' ||
+                                        (typeof val === 'string' && val.trim() === '') ||
+                                        (typeof val === 'number' && isNaN(val))) {
+                                        return '0';
+                                    }
+                                    
+                                    // Si es un número válido pero es 0, mantenerlo como 0
+                                    if (typeof val === 'number' && val === 0) {
+                                        return '0';
+                                    }
+                                    
+                                    // Para columnas que no son de información básica, convertir a número si es posible
+                                    if (!['No.', 'Matricula', 'Nombre_Alumno'].includes(columna)) {
+                                        const numeroVal = parseFloat(val);
+                                        if (!isNaN(numeroVal)) {
+                                            return numeroVal.toString();
+                                        } else if (typeof val === 'string' && val.toLowerCase() === 'null') {
+                                            return '0';
+                                        }
+                                    }
+                                    
+                                    return val;
+                                }
+                                
+                                const valorMostrar = obtenerValorMostrar(valor);
+                                const esValorCero = valorMostrar === '0';
+                                
+                                // ✅ APLICAR ESTILOS SEGÚN TIPO DE COLUMNA
                                 if (columna === 'Calificacion_Final') {
                                     className = 'calificacion-final';
-                                    const cal = parseFloat(valor) || 0;
+                                    const cal = parseFloat(valorMostrar) || 0;
                                     if (cal >= 8) className += ' aprobado';
                                     else if (cal >= 7) className += ' regular';
                                     else className += ' reprobado';
-                                } else if (mapeoActividades[columna] && typeof valor === 'number') {
-                                    let colorBase = mapeoActividades[columna].color;
                                     
-                                    // Intensidad según calificación
-                                    if (valor >= 8) {
+                                    if (esValorCero) className += ' valor-cero';
+                                    
+                                } else if (mapeoActividades[columna]) {
+                                    let colorBase = mapeoActividades[columna].color;
+                                    const valorNum = parseFloat(valorMostrar) || 0;
+                                    
+                                    if (esValorCero) {
+                                        className = 'valor-cero';
+                                        estilo = `background-color: #f8f9fa; color: #6c757d;`;
+                                    } else if (valorNum >= 8) {
                                         estilo = `background-color: ${colorBase};`;
-                                    } else if (valor >= 7) {
+                                    } else if (valorNum >= 7) {
                                         estilo = `background-color: ${colorBase}E8;`;
-                                    } else if (valor >= 5) {
+                                    } else if (valorNum >= 5) {
                                         estilo = `background-color: ${colorBase}D0;`;
-                                    } else if (valor > 0) {
+                                    } else if (valorNum > 0) {
                                         estilo = `background-color: ${colorBase}C0;`;
                                     }
                                 } else if (['No.', 'Matricula', 'Nombre_Alumno'].includes(columna)) {
                                     className = 'info-basic';
                                 }
                                 
-                                return `<td class="${className}" style="${estilo}">${valor || ''}</td>`;
+                                return `<td class="${className}" style="${estilo}">${valorMostrar}</td>`;
                             }).join('')}
                         </tr>
                     `).join('')}
@@ -1021,82 +1046,9 @@ const generarHTMLLimpio = (datos, filtros, stats) => {
 
         <div class="footer">
             <div class="logo">🎓 Universidad Tecnológica de la Huasteca Hidalguense (UTHH)</div>
-            <div>Sistema de Gestión Académica - Reporte Completo de Calificaciones</div>
+            <div>Sistema de Gestión Académica - Reporte de Calificaciones</div>
             <div style="color: #666; margin-top: 3px;">© 2025 - Plataforma Docente UTHH</div>
         </div>
-
-        <script>
-            // Gráfico de Pastel - Aprobados vs Reprobados (criterio 7+)
-            const ctxPie = document.getElementById('pieChart').getContext('2d');
-            new Chart(ctxPie, {
-                type: 'pie',
-                data: {
-                    labels: ['Aprobados (7+)', 'Reprobados (<7)'],
-                    datasets: [{
-                        data: [${datosGrafico.aprobados}, ${datosGrafico.reprobados}],
-                        backgroundColor: ['#28a745', '#dc3545'],
-                        borderWidth: 2,
-                        borderColor: '#fff'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        title: {
-                            display: true,
-                            text: 'Distribución de Calificaciones',
-                            font: { size: 12, weight: 'bold' }
-                        },
-                        legend: {
-                            position: 'bottom'
-                        }
-                    }
-                }
-            });
-
-            // Gráfico de Barras - Histograma de Calificaciones
-            const ctxBar = document.getElementById('barChart').getContext('2d');
-            new Chart(ctxBar, {
-                type: 'bar',
-                data: {
-                    labels: ${JSON.stringify(rangos)},
-                    datasets: [{
-                        label: 'Número de Alumnos',
-                        data: ${JSON.stringify(conteoRangos)},
-                        backgroundColor: [
-                            '#dc3545', '#fd7e14', '#ffc107', '#28a745', '#20c997'
-                        ],
-                        borderColor: [
-                            '#dc3545', '#fd7e14', '#ffc107', '#28a745', '#20c997'
-                        ],
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        title: {
-                            display: true,
-                            text: 'Distribución por Rangos',
-                            font: { size: 12, weight: 'bold' }
-                        },
-                        legend: {
-                            display: false
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            ticks: {
-                                stepSize: 1
-                            }
-                        }
-                    }
-                }
-            });
-        </script>
     </body>
     </html>
   `;

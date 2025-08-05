@@ -245,11 +245,25 @@ const obtenerComponentesPorMateria = async (req, res) => {
     // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
     
-    // 🔥 LLAMAR A TU SP REAL CON NOMBRES CORRECTOS
+    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
+    let periodoReal = periodo;
+    if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
+      console.log('🔄 Resolviendo periodo automático...');
+      const periodoResult = await pool.request().execute('sp_ObtenerPeriodoActual');
+      
+      if (periodoResult.recordset.length === 0) {
+        return res.status(400).json({ error: 'No se pudo obtener el periodo actual' });
+      }
+      
+      periodoReal = periodoResult.recordset[0].Periodo.toString();
+      console.log(`✅ Periodo resuelto: ${periodoReal}`);
+    }
+    
+    // 🔥 LLAMAR A TU SP REAL CON PERIODO REAL
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodo)  // 👈 Tu parámetro se llama vchPeriodo
+      .input('vchPeriodo', sql.VarChar, periodoReal)  // 👈 USAR PERIODO REAL
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_ObtenerComponentesMateria');  // 👈 Tu SP real
     
@@ -294,7 +308,13 @@ const obtenerComponentesPorMateria = async (req, res) => {
       sumaTotal: parseFloat(sumaTotal.toFixed(2)),
       disponible: parseFloat(disponible.toFixed(2)),
       validacion,
-      estadisticas
+      estadisticas,
+      periodoUsado: periodoReal, // 👈 INCLUIR PARA DEBUG
+      debug: {
+        periodoOriginal: periodo,
+        periodoResuelto: periodoReal,
+        componentesEncontrados: componentesMapeados.length
+      }
     });
 
     // Cerrar conexión
@@ -328,12 +348,26 @@ const crearComponente = async (req, res) => {
 
     const pool = await sql.connect(config);
 
+    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
+    let periodoReal = periodo;
+    if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
+      console.log('🔄 Resolviendo periodo automático...');
+      const periodoResult = await pool.request().execute('sp_ObtenerPeriodoActual');
+      
+      if (periodoResult.recordset.length === 0) {
+        return res.status(400).json({ error: 'No se pudo obtener el periodo actual' });
+      }
+      
+      periodoReal = periodoResult.recordset[0].Periodo.toString();
+      console.log(`✅ Periodo resuelto: ${periodoReal}`);
+    }
+
     // 🔥 OBTENER SUMA ACTUAL - MANEJO SEGURO
     console.log('🔍 Obteniendo suma actual...');
     const sumResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_sumaComponentes');
     
@@ -343,7 +377,6 @@ const crearComponente = async (req, res) => {
     let sumaActual = 0;
     if (sumResult.recordset && sumResult.recordset.length > 0) {
       const record = sumResult.recordset[0];
-      // Probar diferentes nombres de columna que podría retornar tu SP
       sumaActual = parseFloat(record.suma_actual || record.suma || record.total || record.sumaTotal || 0);
     }
     
@@ -376,12 +409,12 @@ const crearComponente = async (req, res) => {
       seAutoAjusto = true;
     }
 
-    // 🔥 CREAR COMPONENTE
+    // 🔥 CREAR COMPONENTE CON PERIODO REAL
     console.log('📝 Creando componente...');
     const result = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
       .input('claveDocente', sql.VarChar, claveDocente)
       .input('nombreComponente', sql.VarChar, nombreComponente)
       .input('valorComponente', sql.Decimal(5,2), valorFinal)
@@ -412,6 +445,7 @@ const crearComponente = async (req, res) => {
         ? `Componente creado y auto-ajustado a ${valorFinal} puntos` 
         : 'Componente creado exitosamente',
       id_componente: result.recordset?.[0]?.id_componente || 'creado',
+      periodoUsado: periodoReal, // 👈 INCLUIR EN RESPUESTA PARA DEBUG
       estadisticas: {
         valorAsignado: valorFinal,
         sumaNueva: nuevaSumaFinal,
@@ -435,7 +469,6 @@ const crearComponente = async (req, res) => {
     });
   }
 };
-
 
 
 // 🆕 NUEVA FUNCIÓN PARA VALIDAR PARCIAL CON TU LÓGICA
@@ -668,20 +701,49 @@ const eliminarComponente = async (req, res) => {
     // 🔥 CONECTAR A SQL SERVER
     const pool = await sql.connect(config);
 
-    // 🔥 VERIFICAR SI TIENE ACTIVIDADES VINCULADAS CON TU SP
-    const vinculaciones = await pool.request()
+    // 🔥 OBTENER INFO DEL COMPONENTE ANTES DE ELIMINAR
+    const componenteInfo = await pool.request()
       .input('idComponente', sql.Int, idComponente)
-      .execute('sp_VerificarActividadesConComponentes');
+      .query(`
+        SELECT *
+        FROM tbl_valor_componentes_evaluacion
+        WHERE id_valor_componente = @idComponente
+      `);
+    
+    if (!componenteInfo.recordset || componenteInfo.recordset.length === 0) {
+      await pool.close();
+      return res.status(404).json({
+        error: 'Componente no encontrado'
+      });
+    }
 
-    if (vinculaciones.recordset[0]?.cantidad > 0) {
-      const actividades = vinculaciones.recordsets[1] || [];
+    const componente = componenteInfo.recordset[0];
+    const valorLiberado = parseFloat(componente?.valor_componente || 0);
+
+    // 🔥 VERIFICAR ACTIVIDADES VINCULADAS A ESTE COMPONENTE ESPECÍFICO
+    console.log('🔍 Verificando actividades vinculadas al componente específico...');
+    
+    const actividadesVinculadas = await pool.request()
+      .input('idComponente', sql.Int, idComponente)
+      .query(`
+        SELECT 
+          COUNT(*) as cantidad,
+          STRING_AGG(a.titulo, ', ') as nombres_actividades
+        FROM tbl_actividades a
+        WHERE a.id_valor_componente = @idComponente
+      `);
+
+    const cantidadActividades = actividadesVinculadas.recordset[0]?.cantidad || 0;
+    const nombresActividades = actividadesVinculadas.recordset[0]?.nombres_actividades || '';
+
+    if (cantidadActividades > 0) {
       await pool.close();
       
       return res.status(400).json({
         error: 'No se puede eliminar el componente porque tiene actividades vinculadas',
         detalles: {
-          actividadesVinculadas: vinculaciones.recordset[0].cantidad,
-          actividades: actividades.map(a => a.nombre_actividad || a.actividad)
+          actividadesVinculadas: cantidadActividades,
+          actividades: nombresActividades.split(', ').filter(nombre => nombre.trim())
         },
         soluciones: [
           'Elimina primero las actividades vinculadas',
@@ -690,17 +752,7 @@ const eliminarComponente = async (req, res) => {
       });
     }
 
-    // 🔥 OBTENER INFO ANTES DE ELIMINAR
-    const componenteInfo = await pool.request()
-      .input('idComponente', sql.Int, idComponente)
-      .query(`
-        SELECT *
-        FROM tbl_valor_componentes_evaluacion
-        WHERE id_valor_componente = @idComponente
-      `);
-
-    const componente = componenteInfo.recordset[0];
-    const valorLiberado = parseFloat(componente?.valor_componente || 0);
+    console.log('✅ El componente no tiene actividades vinculadas, procediendo a eliminar...');
 
     // 🔥 ELIMINAR EL COMPONENTE CON TU SP
     const result = await pool.request()
@@ -711,12 +763,14 @@ const eliminarComponente = async (req, res) => {
     const nuevaSumaResult = await pool.request()
       .input('claveMateria', sql.VarChar, componente.vchClvMateria)
       .input('parcial', sql.Int, componente.parcial)
-      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)  // 👈 Cambio aquí
+      .input('vchPeriodo', sql.VarChar, componente.vchPeriodo)
       .input('claveDocente', sql.VarChar, componente.vchClvTrabajador)
       .execute('sp_sumaComponentes');
 
     const sumaNueva = parseFloat(nuevaSumaResult.recordset[0]?.suma_actual || nuevaSumaResult.recordset[0]?.suma || 0);
     const nuevoDisponible = 10 - sumaNueva;
+
+    console.log(`✅ Componente eliminado. Nueva suma: ${sumaNueva}, Disponible: ${nuevoDisponible}`);
 
     res.json({
       mensaje: 'Componente eliminado exitosamente',
@@ -735,7 +789,8 @@ const eliminarComponente = async (req, res) => {
   } catch (error) {
     console.error('Error al eliminar componente:', error);
     res.status(500).json({
-      error: 'Error interno del servidor al eliminar el componente'
+      error: 'Error interno del servidor al eliminar el componente',
+      detalle: error.message
     });
   }
 };
@@ -2795,11 +2850,26 @@ const guardarComponentesMasivo = async (req, res) => {
     // 🔥 CONECTAR AL POOL PRIMERO
     pool = await sql.connect(config);
     
+    // 🚀 PASO 1: RESOLVER EL PERIODO REAL
+    let periodoReal = periodo;
+    if (!periodo || periodo === 'auto' || periodo === 'null' || periodo === 'undefined') {
+      console.log('🔄 Resolviendo periodo automático...');
+      const periodoResult = await pool.request().execute('sp_ObtenerPeriodoActual');
+      
+      if (periodoResult.recordset.length === 0) {
+        return res.status(400).json({ error: 'No se pudo obtener el periodo actual' });
+      }
+      
+      periodoReal = periodoResult.recordset[0].Periodo.toString();
+      console.log(`✅ Periodo resuelto: ${periodoReal}`);
+    }
+    
     // 🔥 CREAR TRANSACCIÓN DESDE EL POOL
     transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     console.log(`🔄 Iniciando guardado masivo: ${operaciones.length} operaciones`);
+    console.log(`📅 Usando periodo: ${periodoReal}`);
 
     // 🔥 VALIDAR QUE LA SUMA FINAL SEA EXACTAMENTE 10
     const operacionesCrear = operaciones.filter(op => op.tipo === 'crear');
@@ -2813,7 +2883,7 @@ const guardarComponentesMasivo = async (req, res) => {
     const componentesActualesResult = await transaction.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_ObtenerComponentesMateria');
 
@@ -2861,7 +2931,7 @@ const guardarComponentesMasivo = async (req, res) => {
     let componentesEliminados = 0;
     const errores = [];
 
-    // 🔥 PASO 1: ELIMINAR COMPONENTES
+    // 🔥 PASO 2: ELIMINAR COMPONENTES
     for (const operacion of operacionesEliminar) {
       try {
         console.log(`🗑️ Eliminando componente ID: ${operacion.id}`);
@@ -2869,7 +2939,11 @@ const guardarComponentesMasivo = async (req, res) => {
         // Verificar si tiene actividades vinculadas
         const vinculaciones = await transaction.request()
           .input('idComponente', sql.Int, operacion.id)
-          .execute('sp_VerificarActividadesConComponentes');
+          .query(`
+            SELECT COUNT(*) as cantidad
+            FROM tbl_actividades a
+            WHERE a.id_valor_componente = @idComponente
+          `);
 
         if (vinculaciones.recordset[0]?.cantidad > 0) {
           errores.push({
@@ -2898,7 +2972,7 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     }
 
-    // 🔥 PASO 2: CREAR COMPONENTES NUEVOS
+    // 🔥 PASO 3: CREAR COMPONENTES NUEVOS
     for (const operacion of operacionesCrear) {
       try {
         console.log(`🆕 Creando componente: ${operacion.nombreComponente}`);
@@ -2906,7 +2980,7 @@ const guardarComponentesMasivo = async (req, res) => {
         await transaction.request()
           .input('claveMateria', sql.VarChar, claveMateria)
           .input('parcial', sql.Int, parcial)
-          .input('vchPeriodo', sql.VarChar, periodo)
+          .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
           .input('claveDocente', sql.VarChar, claveDocente)
           .input('nombreComponente', sql.VarChar, operacion.nombreComponente)
           .input('valorComponente', sql.Decimal(5,2), operacion.valorComponente)
@@ -2925,7 +2999,7 @@ const guardarComponentesMasivo = async (req, res) => {
       }
     }
 
-    // 🔥 PASO 3: MODIFICAR COMPONENTES EXISTENTES
+    // 🔥 PASO 4: MODIFICAR COMPONENTES EXISTENTES
     for (const operacion of operacionesModificar) {
       try {
         console.log(`✏️ Modificando componente ID: ${operacion.id}`);
@@ -2975,7 +3049,7 @@ const guardarComponentesMasivo = async (req, res) => {
     const estadoFinalResult = await pool.request()
       .input('claveMateria', sql.VarChar, claveMateria)
       .input('parcial', sql.Int, parcial)
-      .input('vchPeriodo', sql.VarChar, periodo)
+      .input('vchPeriodo', sql.VarChar, periodoReal) // 👈 USAR PERIODO REAL
       .input('claveDocente', sql.VarChar, claveDocente)
       .execute('sp_sumaComponentes');
 
@@ -3003,6 +3077,13 @@ const guardarComponentesMasivo = async (req, res) => {
         esValido: sumaFinalReal <= 10
       },
 
+      // 👈 INCLUIR PARA DEBUG
+      periodoUsado: periodoReal,
+      debug: {
+        periodoOriginal: periodo,
+        periodoResuelto: periodoReal
+      },
+
       // Solo incluir errores si los hay
       ...(erroresTotales > 0 && { errores }),
 
@@ -3021,6 +3102,7 @@ const guardarComponentesMasivo = async (req, res) => {
     console.log(`   🗑️ Eliminados: ${componentesEliminados}`);
     console.log(`   ❌ Errores: ${erroresTotales}`);
     console.log(`   🎯 Suma final: ${sumaFinalReal} pts`);
+    console.log(`   📅 Periodo usado: ${periodoReal}`);
 
     res.json(respuesta);
 
